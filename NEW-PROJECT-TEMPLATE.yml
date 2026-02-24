@@ -1,0 +1,56 @@
+# ============================================================
+# NEW PROJECT DEPLOY TEMPLATE
+# Instructions:
+#   1. Copy this file into your project repo at:
+#        .github/workflows/deploy.yml
+#   2. Replace every value marked with  <-- CHANGE THIS
+#   3. Commit and push to the "Deploy" branch to trigger
+# ============================================================
+
+name: Deploy to IIS   # <-- CHANGE THIS  (display name shown in Actions tab)
+
+on:
+  push:
+    branches:
+      - Deploy          # trigger only when commits land on the Deploy branch
+
+jobs:
+  call-deploy:
+    # Delegate all work to the shared reusable workflow in the central repo
+    uses: SDPLaos2023/github-workflows/.github/workflows/deploy-iis-dotnet.yml@main
+
+    with:
+      # ---- REQUIRED inputs -----------------------------------------------
+
+      # Relative path to your .csproj from the root of THIS repository
+      # Example: "src/MyApp/MyApp.csproj"
+      project_path: 'src/MyApp/MyApp.csproj'   # <-- CHANGE THIS
+
+      # Exact name of the IIS Application Pool on the target server
+      # Find it in IIS Manager > Application Pools
+      app_pool: 'MyApp_Pool'                    # <-- CHANGE THIS
+
+      # Full filesystem path on the server where IIS serves the app
+      # This folder will be wiped and replaced on every deploy
+      deploy_path: 'C:\inetpub\wwwroot\MyApp'  # <-- CHANGE THIS
+
+      # Short identifier used as a prefix for backup archive names
+      # Allowed characters: letters, digits, hyphens, underscores
+      # Result example: MyApp_20260224_153000.zip
+      backup_prefix: 'MyApp'                    # <-- CHANGE THIS
+
+      # Label of the self-hosted GitHub Actions runner attached to the
+      # target Windows server.  Must match a label configured in:
+      #   GitHub > Settings > Actions > Runners
+      runner_label: 'my-server-runner'          # <-- CHANGE THIS
+
+      # ---- OPTIONAL inputs (defaults shown — remove line to use default) ---
+
+      # .NET SDK version.  Supports wildcards: '8.0.x', '9.0.x', etc.
+      # Default: '8.0.x'
+      dotnet_version: '8.0.x'
+
+      # Number of backup archives to keep in C:\BackupIIS for this project.
+      # Oldest archives beyond this count are deleted automatically.
+      # Default: 5
+      backup_keep: 5

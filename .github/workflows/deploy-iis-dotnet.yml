@@ -1,0 +1,258 @@
+name: Deploy ASP.NET Core to IIS
+
+# Reusable workflow — call this from any project repository
+on:
+  workflow_call:
+    inputs:
+      project_path:
+        description: 'Relative path to .csproj from repo root (e.g. src/MyApp/MyApp.csproj)'
+        required: true
+        type: string
+      app_pool:
+        description: 'IIS Application Pool name'
+        required: true
+        type: string
+      deploy_path:
+        description: 'Full destination path on the server (e.g. C:\inetpub\wwwroot\MyApp)'
+        required: true
+        type: string
+      backup_prefix:
+        description: 'Prefix used for backup zip file name (e.g. MyApp)'
+        required: true
+        type: string
+      runner_label:
+        description: 'Label of the self-hosted runner that hosts this IIS site'
+        required: true
+        type: string
+      dotnet_version:
+        description: '.NET SDK version to use'
+        required: false
+        type: string
+        default: '8.0.x'
+      backup_keep:
+        description: 'Maximum number of backup archives to retain per project'
+        required: false
+        type: number
+        default: 5
+
+jobs:
+  deploy:
+    runs-on: ${{ inputs.runner_label }}
+
+    steps:
+      # -----------------------------------------------------------------------
+      # 1. Checkout source code
+      # -----------------------------------------------------------------------
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # 2. Set up .NET SDK
+      # -----------------------------------------------------------------------
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ inputs.dotnet_version }}
+
+      # -----------------------------------------------------------------------
+      # 3. Restore NuGet packages
+      # -----------------------------------------------------------------------
+      - name: Restore dependencies
+        shell: powershell
+        run: |
+          Write-Host "Restoring packages for ${{ inputs.project_path }}"
+          dotnet restore "${{ inputs.project_path }}"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "dotnet restore failed with exit code $LASTEXITCODE"
+            exit $LASTEXITCODE
+          }
+
+      # -----------------------------------------------------------------------
+      # 4. Build and publish to ./publish
+      # -----------------------------------------------------------------------
+      - name: Publish application
+        shell: powershell
+        run: |
+          Write-Host "Publishing ${{ inputs.project_path }}"
+          dotnet publish "${{ inputs.project_path }}" `
+            --configuration Release `
+            --output publish `
+            --no-restore
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "dotnet publish failed with exit code $LASTEXITCODE"
+            exit $LASTEXITCODE
+          }
+
+      # -----------------------------------------------------------------------
+      # 5. Backup: zip current deploy folder → C:\BackupIIS\<prefix>_YYYYMMDD_HHmmss.zip
+      #    Skip quietly when the deploy folder does not yet exist (first deploy)
+      #    Prune oldest archives so only backup_keep files are retained
+      # -----------------------------------------------------------------------
+      - name: Backup current deployment
+        shell: powershell
+        run: |
+          $DeployPath  = "${{ inputs.deploy_path }}"
+          $Prefix      = "${{ inputs.backup_prefix }}"
+          $BackupDir   = "C:\BackupIIS"
+          $KeepCount   = ${{ inputs.backup_keep }}
+
+          # Skip backup when the target folder does not exist yet
+          if (-not (Test-Path $DeployPath)) {
+            Write-Host "Deploy path '$DeployPath' does not exist — skipping backup."
+            exit 0
+          }
+
+          # Ensure backup directory exists
+          if (-not (Test-Path $BackupDir)) {
+            New-Item -ItemType Directory -Path $BackupDir -Force | Out-Null
+            Write-Host "Created backup directory: $BackupDir"
+          }
+
+          $Timestamp  = Get-Date -Format "yyyyMMdd_HHmmss"
+          $ArchiveName = "$Prefix`_$Timestamp.zip"
+          $ArchivePath = Join-Path $BackupDir $ArchiveName
+
+          Write-Host "Creating backup: $ArchivePath"
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [System.IO.Compression.ZipFile]::CreateFromDirectory($DeployPath, $ArchivePath)
+          if (-not (Test-Path $ArchivePath)) {
+            Write-Error "Backup archive was not created: $ArchivePath"
+            exit 1
+          }
+          Write-Host "Backup created: $ArchivePath ($([math]::Round((Get-Item $ArchivePath).Length/1MB, 2)) MB)"
+
+          # Prune old backups for this prefix, keeping only the newest $KeepCount files
+          $Archives = Get-ChildItem -Path $BackupDir -Filter "$Prefix`_*.zip" |
+                      Sort-Object LastWriteTime -Descending
+          $ToDelete = $Archives | Select-Object -Skip $KeepCount
+          foreach ($File in $ToDelete) {
+            Write-Host "Removing old backup: $($File.FullName)"
+            Remove-Item $File.FullName -Force
+          }
+          Write-Host "Backup retention: kept $([Math]::Min($Archives.Count, $KeepCount)) of $($Archives.Count) archives."
+
+      # -----------------------------------------------------------------------
+      # 6. Stop IIS Application Pool (wait up to 30 s for Stopped state)
+      # -----------------------------------------------------------------------
+      - name: Stop Application Pool
+        shell: powershell
+        run: |
+          $PoolName = "${{ inputs.app_pool }}"
+          $Timeout  = 30  # seconds
+
+          Import-Module WebAdministration -ErrorAction Stop
+
+          if ((Get-WebAppPoolState -Name $PoolName).Value -eq 'Started') {
+            Write-Host "Stopping Application Pool '$PoolName'..."
+            Stop-WebAppPool -Name $PoolName
+
+            $Elapsed = 0
+            do {
+              Start-Sleep -Seconds 2
+              $Elapsed += 2
+              $CurrentState = (Get-WebAppPoolState -Name $PoolName).Value
+              Write-Host "  State: $CurrentState (${Elapsed}s)"
+            } while ($CurrentState -ne 'Stopped' -and $Elapsed -lt $Timeout)
+
+            if ((Get-WebAppPoolState -Name $PoolName).Value -ne 'Stopped') {
+              Write-Error "Application Pool '$PoolName' did not stop within ${Timeout}s. Aborting."
+              exit 1
+            }
+            Write-Host "Application Pool stopped."
+          } else {
+            Write-Host "Application Pool '$PoolName' is already stopped."
+          }
+
+      # -----------------------------------------------------------------------
+      # 7. Deploy with robocopy
+      #    robocopy exit codes: 0-7 = success (files copied/skipped/same)
+      #                         8+  = error
+      # -----------------------------------------------------------------------
+      - name: Deploy files with robocopy
+        shell: powershell
+        run: |
+          $Source      = Join-Path $env:GITHUB_WORKSPACE "publish"
+          $Destination = "${{ inputs.deploy_path }}"
+
+          # Ensure destination directory exists
+          if (-not (Test-Path $Destination)) {
+            New-Item -ItemType Directory -Path $Destination -Force | Out-Null
+            Write-Host "Created destination directory: $Destination"
+          }
+
+          Write-Host "Copying from '$Source' to '$Destination'"
+          # /E   = copy subdirectories including empty
+          # /XO  = skip files where destination is newer
+          # /R:3 = retry 3 times on failure
+          # /W:5 = wait 5 seconds between retries
+          # /NP  = no progress bar (cleaner log)
+          robocopy $Source $Destination /E /XO /R:3 /W:5 /NP
+
+          # robocopy exit codes 0-7 indicate success
+          if ($LASTEXITCODE -ge 8) {
+            Write-Error "robocopy failed with exit code $LASTEXITCODE"
+            exit $LASTEXITCODE
+          }
+          Write-Host "Files deployed successfully (robocopy exit code: $LASTEXITCODE)."
+          exit 0
+
+      # -----------------------------------------------------------------------
+      # 8. Start IIS Application Pool (wait up to 30 s for Started state)
+      # -----------------------------------------------------------------------
+      - name: Start Application Pool
+        shell: powershell
+        run: |
+          $PoolName = "${{ inputs.app_pool }}"
+          $Timeout  = 30  # seconds
+
+          Import-Module WebAdministration -ErrorAction Stop
+
+          Write-Host "Starting Application Pool '$PoolName'..."
+          Start-WebAppPool -Name $PoolName
+
+          $Elapsed = 0
+          $CurrentState = ''
+          do {
+            Start-Sleep -Seconds 2
+            $Elapsed += 2
+            $CurrentState = (Get-WebAppPoolState -Name $PoolName).Value
+            Write-Host "  State: $CurrentState (${Elapsed}s)"
+          } while ($CurrentState -ne 'Started' -and $Elapsed -lt $Timeout)
+
+          if ((Get-WebAppPoolState -Name $PoolName).Value -ne 'Started') {
+            Write-Error "Application Pool '$PoolName' did not reach Started state within ${Timeout}s."
+            exit 1
+          }
+          Write-Host "Application Pool started successfully."
+
+      # -----------------------------------------------------------------------
+      # 9. Verify: App Pool state = Started AND primary .dll exists
+      # -----------------------------------------------------------------------
+      - name: Verify deployment
+        shell: powershell
+        run: |
+          $PoolName    = "${{ inputs.app_pool }}"
+          $DeployPath  = "${{ inputs.deploy_path }}"
+          $ProjectFile = "${{ inputs.project_path }}"
+
+          Import-Module WebAdministration -ErrorAction Stop
+
+          # Check App Pool state
+          $PoolState = (Get-WebAppPoolState -Name $PoolName).Value
+
+          if ($PoolState -ne 'Started') {
+            Write-Error "Verification failed: Application Pool '$PoolName' state is '$PoolState', expected 'Started'."
+            exit 1
+          }
+          Write-Host "App Pool '$PoolName' is Started."
+
+          # Derive assembly name from .csproj filename
+          $AssemblyName = [System.IO.Path]::GetFileNameWithoutExtension($ProjectFile)
+          $DllPath      = Join-Path $DeployPath "$AssemblyName.dll"
+
+          if (-not (Test-Path $DllPath)) {
+            Write-Error "Verification failed: Expected DLL not found at '$DllPath'."
+            exit 1
+          }
+          Write-Host "DLL verified: $DllPath"
+          Write-Host "Deployment verification passed."
