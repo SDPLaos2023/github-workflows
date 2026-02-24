@@ -109,7 +109,7 @@ jobs:
           }
 
           $Timestamp   = Get-Date -Format "yyyyMMdd_HHmmss"
-          $ArchiveName = "${Prefix}_${Timestamp}.zip"
+          $ArchiveName = $Prefix + "_" + $Timestamp + ".zip"
           $ArchivePath = Join-Path $BackupDir $ArchiveName
 
           Write-Host "Creating backup: $ArchivePath"
@@ -120,17 +120,22 @@ jobs:
             exit 1
           }
           $SizeMB = [math]::Round((Get-Item $ArchivePath).Length / 1048576, 2)
-          Write-Host "Backup created: $ArchivePath ($SizeMB MB)"
+          Write-Host "Backup created: $ArchivePath - $SizeMB MB"
 
           # Prune old backups for this prefix, keeping only the newest $KeepCount files
-          $Archives = Get-ChildItem -Path $BackupDir -Filter "${Prefix}_*.zip" |
+          $FilterPattern = $Prefix + "_*.zip"
+          $Archives = Get-ChildItem -Path $BackupDir -Filter $FilterPattern |
                       Sort-Object LastWriteTime -Descending
           $ToDelete = $Archives | Select-Object -Skip $KeepCount
           foreach ($File in $ToDelete) {
-            Write-Host "Removing old backup: $($File.FullName)"
-            Remove-Item $File.FullName -Force
+            $FilePath = $File.FullName
+            Write-Host "Removing old backup: $FilePath"
+            Remove-Item $FilePath -Force
           }
-          Write-Host "Backup retention: kept $([Math]::Min($Archives.Count, $KeepCount)) of $($Archives.Count) archives."
+          $KeptCount = $Archives.Count
+          if ($KeptCount -gt $KeepCount) { $KeptCount = $KeepCount }
+          $TotalCount = $Archives.Count
+          Write-Host "Backup retention: kept $KeptCount of $TotalCount archives."
 
       # -----------------------------------------------------------------------
       # 6. Stop IIS Application Pool (wait up to 30 s for Stopped state)
