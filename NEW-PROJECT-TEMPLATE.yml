@@ -46,10 +46,6 @@ jobs:
 
       # ---- OPTIONAL inputs (defaults shown — remove line to use default) ---
 
-      # .NET SDK version.  Supports wildcards: '8.0.x', '9.0.x', etc.
-      # Default: '8.0.x'
-      dotnet_version: '8.0.x'
-
       # Number of backup archives to keep in C:\BackupIIS for this project.
       # Oldest archives beyond this count are deleted automatically.
       # Default: 5
