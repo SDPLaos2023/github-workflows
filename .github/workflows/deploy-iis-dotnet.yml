@@ -108,8 +108,8 @@ jobs:
             Write-Host "Created backup directory: $BackupDir"
           }
 
-          $Timestamp  = Get-Date -Format "yyyyMMdd_HHmmss"
-          $ArchiveName = "$Prefix`_$Timestamp.zip"
+          $Timestamp   = Get-Date -Format "yyyyMMdd_HHmmss"
+          $ArchiveName = "${Prefix}_${Timestamp}.zip"
           $ArchivePath = Join-Path $BackupDir $ArchiveName
 
           Write-Host "Creating backup: $ArchivePath"
@@ -119,10 +119,11 @@ jobs:
             Write-Error "Backup archive was not created: $ArchivePath"
             exit 1
           }
-          Write-Host "Backup created: $ArchivePath ($([math]::Round((Get-Item $ArchivePath).Length/1MB, 2)) MB)"
+          $SizeMB = [math]::Round((Get-Item $ArchivePath).Length / 1048576, 2)
+          Write-Host "Backup created: $ArchivePath ($SizeMB MB)"
 
           # Prune old backups for this prefix, keeping only the newest $KeepCount files
-          $Archives = Get-ChildItem -Path $BackupDir -Filter "$Prefix`_*.zip" |
+          $Archives = Get-ChildItem -Path $BackupDir -Filter "${Prefix}_*.zip" |
                       Sort-Object LastWriteTime -Descending
           $ToDelete = $Archives | Select-Object -Skip $KeepCount
           foreach ($File in $ToDelete) {
