@@ -24,11 +24,6 @@ on:
         description: 'Label of the self-hosted runner that hosts this IIS site'
         required: true
         type: string
-      dotnet_version:
-        description: '.NET SDK version to use'
-        required: false
-        type: string
-        default: '8.0.x'
       backup_keep:
         description: 'Maximum number of backup archives to retain per project'
         required: false
@@ -47,12 +42,18 @@ jobs:
         uses: actions/checkout@v4
 
       # -----------------------------------------------------------------------
-      # 2. Set up .NET SDK
+      # 2. Check .NET SDK availability
       # -----------------------------------------------------------------------
-      - name: Setup .NET SDK
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: ${{ inputs.dotnet_version }}
+      - name: Check .NET SDK
+        shell: powershell
+        run: |
+          $dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
+          if ($dotnet) {
+            $version = & dotnet --version 2>&1
+            Write-Host ".NET SDK found: $version ($($dotnet.Source))"
+          } else {
+            Write-Host "WARNING: .NET SDK not found on this runner."
+          }
 
       # -----------------------------------------------------------------------
       # 3. Restore NuGet packages
