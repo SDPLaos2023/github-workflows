@@ -98,44 +98,42 @@ jobs:
 
           # Skip backup when the target folder does not exist yet
           if (-not (Test-Path $DeployPath)) {
-            Write-Host "Deploy path '$DeployPath' does not exist — skipping backup."
+            Write-Host ('Deploy path ' + $DeployPath + ' does not exist - skipping backup.')
             exit 0
           }
 
           # Ensure backup directory exists
           if (-not (Test-Path $BackupDir)) {
             New-Item -ItemType Directory -Path $BackupDir -Force | Out-Null
-            Write-Host "Created backup directory: $BackupDir"
+            Write-Host ('Created backup directory: ' + $BackupDir)
           }
 
-          $Timestamp   = Get-Date -Format "yyyyMMdd_HHmmss"
-          $ArchiveName = $Prefix + "_" + $Timestamp + ".zip"
+          $Timestamp   = Get-Date -Format 'yyyyMMdd_HHmmss'
+          $ArchiveName = $Prefix + '_' + $Timestamp + '.zip'
           $ArchivePath = Join-Path $BackupDir $ArchiveName
 
-          Write-Host "Creating backup: $ArchivePath"
+          Write-Host ('Creating backup: ' + $ArchivePath)
           Add-Type -AssemblyName System.IO.Compression.FileSystem
           [System.IO.Compression.ZipFile]::CreateFromDirectory($DeployPath, $ArchivePath)
           if (-not (Test-Path $ArchivePath)) {
-            Write-Error "Backup archive was not created: $ArchivePath"
+            Write-Error ('Backup archive was not created: ' + $ArchivePath)
             exit 1
           }
           $SizeMB = [math]::Round((Get-Item $ArchivePath).Length / 1048576, 2)
-          Write-Host "Backup created: $ArchivePath - $SizeMB MB"
+          Write-Host ('Backup created: ' + $ArchivePath + ' - ' + $SizeMB + ' MB')
 
           # Prune old backups for this prefix, keeping only the newest $KeepCount files
-          $FilterPattern = $Prefix + "_*.zip"
+          $FilterPattern = $Prefix + '_*.zip'
           $Archives = Get-ChildItem -Path $BackupDir -Filter $FilterPattern |
                       Sort-Object LastWriteTime -Descending
           $ToDelete = $Archives | Select-Object -Skip $KeepCount
           foreach ($File in $ToDelete) {
-            $FilePath = $File.FullName
-            Write-Host "Removing old backup: $FilePath"
-            Remove-Item $FilePath -Force
+            Write-Host ('Removing old backup: ' + $File.FullName)
+            Remove-Item $File.FullName -Force
           }
-          $KeptCount = $Archives.Count
-          if ($KeptCount -gt $KeepCount) { $KeptCount = $KeepCount }
           $TotalCount = $Archives.Count
-          Write-Host "Backup retention: kept $KeptCount of $TotalCount archives."
+          $KeptCount  = if ($TotalCount -lt $KeepCount) { $TotalCount } else { $KeepCount }
+          Write-Host ('Backup retention: kept ' + $KeptCount + ' of ' + $TotalCount + ' archives.')
 
       # -----------------------------------------------------------------------
       # 6. Stop IIS Application Pool (wait up to 30 s for Stopped state)
