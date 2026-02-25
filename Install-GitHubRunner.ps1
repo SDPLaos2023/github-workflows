@@ -436,10 +436,25 @@ $configArgs = @(
     # deregistering another runner.
 )
 
+# Show config summary so user can verify before running
+Write-Host ""
+Write-Host "  Config summary:" -ForegroundColor DarkGray
+Write-Host "    URL   : $RepoUrl" -ForegroundColor DarkGray
+Write-Host "    Token : $($RegistrationToken.Substring(0, [Math]::Min(4, $RegistrationToken.Length)))***  (first 4 chars shown)" -ForegroundColor DarkGray
+Write-Host "    Name  : $RunnerName" -ForegroundColor DarkGray
+Write-Host ""
+
 Set-Location $RunnerRoot
 & $configCmd @configArgs
 
 if ($LASTEXITCODE -ne 0) {
+    Write-Host ""
+    Write-Host "  config.cmd failed. Common causes:" -ForegroundColor Yellow
+    Write-Host "    - Registration token expired (valid 1 hour only) -- generate a new one" -ForegroundColor Yellow
+    Write-Host "      at: https://github.com/$repoOwner/$repoName/settings/actions/runners/new" -ForegroundColor Yellow
+    Write-Host "    - Token was generated for a different repo -- make sure to use the token" -ForegroundColor Yellow
+    Write-Host "      from the page above, not from another project" -ForegroundColor Yellow
+    Write-Host "    - URL mismatch -- verify URL shown above matches the repo exactly" -ForegroundColor Yellow
     throw "config.cmd failed (exit code: $LASTEXITCODE). Check the output above for details."
 }
 Write-Success "Runner configured and service installed successfully."
