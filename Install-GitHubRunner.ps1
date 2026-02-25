@@ -73,7 +73,14 @@ param(
     [string] $RunnerRoot    = "",   # defaults to C:\actions-runner\<repo-name> if left empty
 
     # Directory on this server where deploy backups are stored
-    [string] $BackupPath    = "C:\BackupIIS"
+    [string] $BackupPath    = "C:\BackupIIS",
+
+    # Registration token obtained manually from GitHub UI
+    # Use this if you don't have repo Admin rights to auto-fetch via PAT
+    # Get it at: GitHub -> repo -> Settings -> Actions -> Runners -> New self-hosted runner
+    # Token looks like: AXXXXXXXXXXXXXXXXXXXXXXXXXX  (expires in 1 hour)
+    # Leave empty to auto-fetch via PAT instead
+    [string] $RegistrationToken = ""
 )
 
 Set-StrictMode -Version Latest
@@ -136,51 +143,84 @@ $RunnerZip         = "actions-runner-win-x64-$RunnerVersion.zip"
 $RunnerDownloadUrl = "https://github.com/actions/runner/releases/download/v$RunnerVersion/$RunnerZip"
 
 Write-Host ""
-Write-Host "=== [3/3] GitHub Credentials (hidden)" -ForegroundColor Cyan
-$PatTokenSecure      = Read-Host "  GitHub PAT Token (repo + workflow scope)" -AsSecureString
-$PatToken            = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
-                           [Runtime.InteropServices.Marshal]::SecureStringToBSTR($PatTokenSecure))
-
-# ---------------------------------------------------------------------------
-# Auto-fetch Registration Token via PAT (avoids 1-hour manual expiry)
-# ---------------------------------------------------------------------------
+Write-Host "=== [3/3] GitHub Credentials" -ForegroundColor Cyan
+Write-Host "  Choose authentication method:" -ForegroundColor DarkGray
+Write-Host "  [1] PAT Token  (auto-fetch token — requires repo Admin rights)" -ForegroundColor DarkGray
+Write-Host "  [2] Registration Token  (manual — get from GitHub UI, expires in 1 hour)" -ForegroundColor DarkGray
 Write-Host ""
-Write-Host "Fetching fresh runner registration token via PAT..." -ForegroundColor Cyan
-$repoOwner    = $RepoUrl.Split('/')[-2]
-$apiUrl       = "https://api.github.com/repos/$repoOwner/$repoName/actions/runners/registration-token"
-$apiHeaders   = @{
-    Authorization = "token $PatToken"
-    Accept        = "application/vnd.github.v3+json"
-    "User-Agent"  = "PowerShell-RunnerInstaller"
-}
 
-# Verify PAT identity first — confirms the token is valid and shows who it belongs to
-try {
-    $whoami = Invoke-RestMethod -Uri "https://api.github.com/user" -Headers $apiHeaders -Method GET
-    Write-Host "[OK] PAT belongs to GitHub user: $($whoami.login)" -ForegroundColor Green
-} catch {
-    throw "PAT Token is invalid or expired. Please generate a new token at:`n  https://github.com/settings/tokens`nRequired scopes: repo, workflow"
-}
+$repoOwner = $RepoUrl.Split('/')[-2]
 
-# Fetch registration token — requires repo Admin permission
-try {
-    $tokenResponse     = Invoke-RestMethod -Uri $apiUrl -Method POST -Headers $apiHeaders
-    $RegistrationToken = $tokenResponse.token
-    Write-Host "[OK] Registration token obtained (expires: $($tokenResponse.expires_at))." -ForegroundColor Green
-} catch {
-    $statusCode = $_.Exception.Response.StatusCode.value__
-    Write-Host ""
-    Write-Host "  ERROR: Could not get registration token (HTTP $statusCode)" -ForegroundColor Red
-    Write-Host ""
-    Write-Host "  Common causes:" -ForegroundColor Yellow
-    Write-Host "    1) PAT owner is not an Admin of repo '$repoOwner/$repoName'" -ForegroundColor Yellow
-    Write-Host "       -> Go to: https://github.com/$repoOwner/$repoName/settings/access" -ForegroundColor Yellow
-    Write-Host "    2) Classic PAT is missing 'repo' scope" -ForegroundColor Yellow
-    Write-Host "       -> Go to: https://github.com/settings/tokens" -ForegroundColor Yellow
-    Write-Host "    3) Fine-grained PAT is missing 'Administration: Read & Write' permission" -ForegroundColor Yellow
-    Write-Host "       -> Go to: https://github.com/settings/personal-access-tokens" -ForegroundColor Yellow
-    Write-Host "    4) Repo '$repoOwner/$repoName' does not exist or is misspelled" -ForegroundColor Yellow
-    throw "Failed to obtain runner registration token."
+if (-not [string]::IsNullOrEmpty($RegistrationToken)) {
+    # Token already supplied via parameter — skip prompts
+    Write-Host "  Using pre-supplied registration token." -ForegroundColor DarkGray
+} else {
+    $authChoice = Read-Host "  Enter choice [1/2]"
+
+    if ($authChoice -eq '2') {
+        # ---------------------------------------------------------------------------
+        # Mode 2 : Manual registration token (from GitHub UI)
+        # ---------------------------------------------------------------------------
+        Write-Host ""
+        Write-Host "  Get your token at:" -ForegroundColor Yellow
+        Write-Host "  https://github.com/$repoOwner/$repoName/settings/actions/runners/new" -ForegroundColor Yellow
+        Write-Host "  Copy the value after '--token' on that page." -ForegroundColor Yellow
+        Write-Host ""
+        $RegTokenSecure     = Read-Host "  Registration Token (hidden)" -AsSecureString
+        $RegistrationToken  = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
+                                  [Runtime.InteropServices.Marshal]::SecureStringToBSTR($RegTokenSecure))
+        Write-Host "[OK] Registration token set." -ForegroundColor Green
+    } else {
+        # ---------------------------------------------------------------------------
+        # Mode 1 : Auto-fetch via PAT (default)
+        # ---------------------------------------------------------------------------
+        $PatTokenSecure = Read-Host "  GitHub PAT Token (repo + workflow scope, hidden)" -AsSecureString
+        $PatToken       = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
+                              [Runtime.InteropServices.Marshal]::SecureStringToBSTR($PatTokenSecure))
+
+        $apiHeaders = @{
+            Authorization = "token $PatToken"
+            Accept        = "application/vnd.github.v3+json"
+            "User-Agent"  = "PowerShell-RunnerInstaller"
+        }
+
+        # Verify PAT identity
+        try {
+            $whoami = Invoke-RestMethod -Uri "https://api.github.com/user" -Headers $apiHeaders -Method GET
+            Write-Host "[OK] PAT belongs to GitHub user: $($whoami.login)" -ForegroundColor Green
+        } catch {
+            throw "PAT Token is invalid or expired.`nGenerate a new one at: https://github.com/settings/tokens`nRequired scopes: repo, workflow"
+        }
+
+        # Fetch registration token
+        Write-Host ""
+        Write-Host "Fetching registration token via PAT..." -ForegroundColor Cyan
+        $apiUrl = "https://api.github.com/repos/$repoOwner/$repoName/actions/runners/registration-token"
+        try {
+            $tokenResponse     = Invoke-RestMethod -Uri $apiUrl -Method POST -Headers $apiHeaders
+            $RegistrationToken = $tokenResponse.token
+            Write-Host "[OK] Registration token obtained (expires: $($tokenResponse.expires_at))." -ForegroundColor Green
+        } catch {
+            $statusCode = $_.Exception.Response.StatusCode.value__
+            Write-Host ""
+            Write-Host "  ERROR: Could not get registration token (HTTP $statusCode)" -ForegroundColor Red
+            Write-Host ""
+            Write-Host "  Common causes:" -ForegroundColor Yellow
+            Write-Host "    1) PAT owner is not an Admin of repo '$repoOwner/$repoName'" -ForegroundColor Yellow
+            Write-Host "       -> Go to: https://github.com/$repoOwner/$repoName/settings/access" -ForegroundColor Yellow
+            Write-Host "    2) Classic PAT is missing 'repo' scope" -ForegroundColor Yellow
+            Write-Host "       -> Go to: https://github.com/settings/tokens" -ForegroundColor Yellow
+            Write-Host "    3) Fine-grained PAT is missing 'Administration: Read & Write' permission" -ForegroundColor Yellow
+            Write-Host "       -> Go to: https://github.com/settings/personal-access-tokens" -ForegroundColor Yellow
+            Write-Host "    4) Repo '$repoOwner/$repoName' does not exist or is misspelled" -ForegroundColor Yellow
+            Write-Host ""
+            Write-Host "  TIP: If you don't have Admin rights, use option [2] instead." -ForegroundColor Cyan
+            Write-Host "       Ask the repo Admin to open:" -ForegroundColor Cyan
+            Write-Host "       https://github.com/$repoOwner/$repoName/settings/actions/runners/new" -ForegroundColor Cyan
+            Write-Host "       and give you the '--token XXXX' value." -ForegroundColor Cyan
+            throw "Failed to obtain runner registration token."
+        }
+    }
 }
 
 # ---------------------------------------------------------------------------
