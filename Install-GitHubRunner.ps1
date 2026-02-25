@@ -101,6 +101,8 @@ if ([string]::IsNullOrEmpty($RepoUrl)) {
 } else {
     Write-Host "  Repo URL   : $RepoUrl" -ForegroundColor DarkGray
 }
+# Sanitize URL — strip trailing ) ] spaces and slashes that may come from pasting markdown links
+$RepoUrl = $RepoUrl.Trim().TrimEnd(')', ']', '/', ' ')
 if ([string]::IsNullOrEmpty($AppPool)) {
     $AppPool = Read-Host "  IIS App Pool name"
 } else {
@@ -142,6 +144,10 @@ if ([string]::IsNullOrEmpty($RunnerRoot)) {
 $RunnerZip         = "actions-runner-win-x64-$RunnerVersion.zip"
 $RunnerDownloadUrl = "https://github.com/actions/runner/releases/download/v$RunnerVersion/$RunnerZip"
 
+# $apiHeaders is only available when mode 1 (PAT) is used
+# Initialized to $null here so conflict check can skip safely in mode 2
+$apiHeaders = $null
+
 Write-Host ""
 Write-Host "=== [3/3] GitHub Credentials" -ForegroundColor Cyan
 Write-Host "  Choose authentication method:" -ForegroundColor DarkGray
@@ -169,6 +175,7 @@ if (-not [string]::IsNullOrEmpty($RegistrationToken)) {
         $RegTokenSecure     = Read-Host "  Registration Token (hidden)" -AsSecureString
         $RegistrationToken  = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
                                   [Runtime.InteropServices.Marshal]::SecureStringToBSTR($RegTokenSecure))
+        $RegistrationToken  = $RegistrationToken.Trim()   # remove any whitespace from paste
         Write-Host "[OK] Registration token set." -ForegroundColor Green
     } else {
         # ---------------------------------------------------------------------------
@@ -396,18 +403,22 @@ if (Test-Path $runnerConfigFile) {
 # Pre-flight: verify no name collision with runners from OTHER repos on GitHub
 # ---------------------------------------------------------------------------
 Write-Step "Checking for runner name conflicts on GitHub..."
-try {
-    $listUrl     = "https://api.github.com/repos/$repoOwner/$repoName/actions/runners"
-    $listResp    = Invoke-RestMethod -Uri $listUrl -Method GET -Headers $apiHeaders
-    $ghRunners   = $listResp.runners | Where-Object { $_.name -eq $RunnerName }
-    if ($ghRunners) {
-        Write-Warn "Runner named '$RunnerName' is already registered for this repo on GitHub."
-        Write-Warn "It will be replaced during configuration (this is expected for reinstall)."
-    } else {
-        Write-Success "No name conflict found -- '$RunnerName' is available."
+if ($null -eq $apiHeaders) {
+    Write-Warn "Skipping conflict check -- no PAT available (mode 2)."
+} else {
+    try {
+        $listUrl     = "https://api.github.com/repos/$repoOwner/$repoName/actions/runners"
+        $listResp    = Invoke-RestMethod -Uri $listUrl -Method GET -Headers $apiHeaders
+        $ghRunners   = $listResp.runners | Where-Object { $_.name -eq $RunnerName }
+        if ($ghRunners) {
+            Write-Warn "Runner named '$RunnerName' is already registered for this repo on GitHub."
+            Write-Warn "It will be replaced during configuration (this is expected for reinstall)."
+        } else {
+            Write-Success "No name conflict found -- '$RunnerName' is available."
+        }
+    } catch {
+        Write-Warn "Could not check existing runners via API: $_ -- continuing anyway."
     }
-} catch {
-    Write-Warn "Could not check existing runners via API: $_ -- continuing anyway."
 }
 
 $configArgs = @(
