@@ -51,57 +51,48 @@ Developer pushes to "Deploy" branch
 
 ## Installing a Self-Hosted Runner on a New Server
 
-Use the helper script below (**`Install-GitHubRunner.ps1`**) or follow the manual steps.
+> Updating the runner version only requires changing `$RunnerVersion` and `$RunnerHash` in
+> [`Install-GitHubRunner.ps1`](Install-GitHubRunner.ps1) — all projects pick up the change automatically.
 
-### Quick-start script
+เปิด **PowerShell as Administrator** บน server แล้วรันบรรทัดนี้บรรทัดเดียว:
 
 ```powershell
-# Install-GitHubRunner.ps1
-# Run as Administrator in PowerShell on the target Windows server
-
-param(
-    [Parameter(Mandatory)] [string] $OrgName,        # e.g. SDPLaos2023
-    [Parameter(Mandatory)] [string] $Token,          # registration token from GitHub
-    [Parameter(Mandatory)] [string] $RunnerLabel,    # e.g. my-server-runner
-    [string] $RunnerDir = "C:\actions-runner"
-)
-
-# 1. Create runner directory
-New-Item -ItemType Directory -Path $RunnerDir -Force | Out-Null
-Set-Location $RunnerDir
-
-# 2. Download latest runner package
-$LatestRelease = Invoke-RestMethod "https://api.github.com/repos/actions/runner/releases/latest"
-$Asset = $LatestRelease.assets | Where-Object { $_.name -like "*win-x64*" } | Select-Object -First 1
-Invoke-WebRequest -Uri $Asset.browser_download_url -OutFile "actions-runner.zip"
-Expand-Archive -Path "actions-runner.zip" -DestinationPath . -Force
-Remove-Item "actions-runner.zip"
-
-# 3. Configure runner
-.\config.cmd `
-    --url "https://github.com/$OrgName" `
-    --token $Token `
-    --name $env:COMPUTERNAME `
-    --labels $RunnerLabel `
-    --unattended `
-    --replace
-
-# 4. Install and start as Windows Service
-.\svc.sh install   # or: .\RunnerService.exe install
-.\svc.sh start
-
-Write-Host "Runner '$RunnerLabel' installed and running."
+Set-ExecutionPolicy Bypass -Scope Process -Force; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; & ([ScriptBlock]::Create((Invoke-WebRequest 'https://raw.githubusercontent.com/SDPLaos2023/github-workflows/main/Install-GitHubRunner.ps1' -UseBasicParsing).Content))
 ```
 
-### Manual steps
+Script จะถามค่าต่างๆ แบบ interactive ทีละขั้น:
 
-1. In GitHub, go to **Organization Settings → Actions → Runners → New self-hosted runner**.
-2. Select **Windows / x64** and copy the registration token.
-3. Run the commands shown on that page on the target server.
-4. Add a custom label that matches the `runner_label` input you will set in each project's `deploy.yml`.
-5. Ensure the runner service account has:
-   - Write access to the `deploy_path` folder.
-   - Permission to manage IIS Application Pools (`IIS Administration` or local Administrator).
+```
+Project Configuration
+  GitHub Repo URL (e.g. https://github.com/SDPLaos2023/MyProject): _
+  Service account (e.g. sdplao\github-runner): _
+  IIS App Pool name: _
+  Deploy path (e.g. C:\inetpub\wwwroot\MyProject): _
+
+Enter credentials (input is hidden)
+  GitHub PAT Token (repo + workflow scope): ****
+  Service account password for 'sdplao\github-runner': ****
+```
+
+Script จะ auto-fetch registration token ผ่าน PAT แล้ว download, verify, extract, configure และ start runner service อัตโนมัติ
+
+ตรวจสอบว่า runner ขึ้น **Idle** ที่:
+`https://github.com/<org>/<repo>/settings/actions/runners`
+
+### Runner Inputs Reference
+
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `RepoUrl` | ✅ | — | Full HTTPS URL of the target GitHub repo |
+| `ServiceAccount` | ✅ | — | Domain user that runs the service (e.g. `sdplao\github-runner`) |
+| `AppPool` | ✅ | — | IIS Application Pool name |
+| `DeployPath` | ✅ | — | Full server path where the app is served |
+| `RunnerName` | ❌ | `COMPUTERNAME` | Name shown in GitHub Settings → Actions → Runners |
+| `RunnerLabels` | ❌ | `= RunnerName` | Comma-separated label(s); must match `runner_label` in `deploy.yml` |
+| `RunnerVersion` | ❌ | `2.331.0` | GitHub Actions runner version to install |
+| `RunnerHash` | ❌ | *(matches version)* | SHA-256 of the runner zip — auto-matches `RunnerVersion` default |
+| `RunnerRoot` | ❌ | `C:\actions-runner\<repo-name>` | Directory where runner files are extracted |
+| `BackupPath` | ❌ | `C:\BackupIIS` | Directory where deploy backup ZIPs are stored |
 
 ---
 
