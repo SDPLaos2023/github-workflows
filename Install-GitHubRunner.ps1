@@ -153,9 +153,35 @@ $apiHeaders   = @{
     Accept        = "application/vnd.github.v3+json"
     "User-Agent"  = "PowerShell-RunnerInstaller"
 }
-$tokenResponse     = Invoke-RestMethod -Uri $apiUrl -Method POST -Headers $apiHeaders
-$RegistrationToken = $tokenResponse.token
-Write-Host "[OK] Registration token obtained (expires: $($tokenResponse.expires_at))." -ForegroundColor Green
+
+# Verify PAT identity first — confirms the token is valid and shows who it belongs to
+try {
+    $whoami = Invoke-RestMethod -Uri "https://api.github.com/user" -Headers $apiHeaders -Method GET
+    Write-Host "[OK] PAT belongs to GitHub user: $($whoami.login)" -ForegroundColor Green
+} catch {
+    throw "PAT Token is invalid or expired. Please generate a new token at:`n  https://github.com/settings/tokens`nRequired scopes: repo, workflow"
+}
+
+# Fetch registration token — requires repo Admin permission
+try {
+    $tokenResponse     = Invoke-RestMethod -Uri $apiUrl -Method POST -Headers $apiHeaders
+    $RegistrationToken = $tokenResponse.token
+    Write-Host "[OK] Registration token obtained (expires: $($tokenResponse.expires_at))." -ForegroundColor Green
+} catch {
+    $statusCode = $_.Exception.Response.StatusCode.value__
+    Write-Host ""
+    Write-Host "  ERROR: Could not get registration token (HTTP $statusCode)" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "  Common causes:" -ForegroundColor Yellow
+    Write-Host "    1) PAT owner is not an Admin of repo '$repoOwner/$repoName'" -ForegroundColor Yellow
+    Write-Host "       -> Go to: https://github.com/$repoOwner/$repoName/settings/access" -ForegroundColor Yellow
+    Write-Host "    2) Classic PAT is missing 'repo' scope" -ForegroundColor Yellow
+    Write-Host "       -> Go to: https://github.com/settings/tokens" -ForegroundColor Yellow
+    Write-Host "    3) Fine-grained PAT is missing 'Administration: Read & Write' permission" -ForegroundColor Yellow
+    Write-Host "       -> Go to: https://github.com/settings/personal-access-tokens" -ForegroundColor Yellow
+    Write-Host "    4) Repo '$repoOwner/$repoName' does not exist or is misspelled" -ForegroundColor Yellow
+    throw "Failed to obtain runner registration token."
+}
 
 # ---------------------------------------------------------------------------
 # Helpers
