@@ -114,8 +114,38 @@ jobs:
           $ArchivePath = Join-Path $BackupDir $ArchiveName
 
           Write-Host ('Creating backup: ' + $ArchivePath)
+          Add-Type -AssemblyName System.IO.Compression
           Add-Type -AssemblyName System.IO.Compression.FileSystem
-          [System.IO.Compression.ZipFile]::CreateFromDirectory($DeployPath, $ArchivePath)
+
+          # Build the zip manually so files locked by IIS (e.g. stdout logs) are
+          # read with FileShare.ReadWrite|Delete instead of the exclusive open that
+          # ZipFile::CreateFromDirectory uses, which would throw an IOException.
+          $ZipStream  = [System.IO.File]::Open($ArchivePath, [System.IO.FileMode]::Create)
+          $ZipArchive = New-Object System.IO.Compression.ZipArchive($ZipStream, [System.IO.Compression.ZipArchiveMode]::Create)
+          $ShareFlags = [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete
+          $SkippedFiles = 0
+
+          Get-ChildItem -Path $DeployPath -Recurse -File | ForEach-Object {
+            $RelPath = $_.FullName.Substring($DeployPath.TrimEnd('\').Length).TrimStart('\')
+            try {
+              $fs    = [System.IO.File]::Open($_.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, $ShareFlags)
+              $entry = $ZipArchive.CreateEntry($RelPath, [System.IO.Compression.CompressionLevel]::Optimal)
+              $es    = $entry.Open()
+              $fs.CopyTo($es)
+              $es.Dispose()
+              $fs.Dispose()
+            } catch {
+              Write-Warning ('Skipping locked file: ' + $RelPath + ' — ' + $_.Exception.Message)
+              $SkippedFiles++
+            }
+          }
+
+          $ZipArchive.Dispose()
+          $ZipStream.Dispose()
+
+          if ($SkippedFiles -gt 0) {
+            Write-Warning ('Backup completed with ' + $SkippedFiles + ' skipped locked file(s).')
+          }
           if (-not (Test-Path $ArchivePath)) {
             Write-Error ('Backup archive was not created: ' + $ArchivePath)
             exit 1
