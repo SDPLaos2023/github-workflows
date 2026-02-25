@@ -170,13 +170,44 @@ if (-not [string]::IsNullOrEmpty($RegistrationToken)) {
         Write-Host ""
         Write-Host "  Get your token at:" -ForegroundColor Yellow
         Write-Host "  https://github.com/$repoOwner/$repoName/settings/actions/runners/new" -ForegroundColor Yellow
-        Write-Host "  Copy the value after '--token' on that page." -ForegroundColor Yellow
+        Write-Host "  Select Windows, then copy the value after '--token' in the Configure section." -ForegroundColor Yellow
         Write-Host ""
-        $RegTokenSecure     = Read-Host "  Registration Token (hidden)" -AsSecureString
-        $RegistrationToken  = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
-                                  [Runtime.InteropServices.Marshal]::SecureStringToBSTR($RegTokenSecure))
-        $RegistrationToken  = $RegistrationToken.Trim()   # remove any whitespace from paste
-        Write-Host "[OK] Registration token set." -ForegroundColor Green
+        Write-Host "  Token format: ~29 uppercase letters and digits (e.g. ABCDE12345FGHIJ67890KLMNO1234)" -ForegroundColor DarkGray
+        Write-Host ""
+
+        # Loop until a valid-looking token is entered
+        $maxAttempts = 3
+        for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+            $RegTokenSecure    = Read-Host "  Registration Token (hidden)"  -AsSecureString
+            $RegistrationToken = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
+                                     [Runtime.InteropServices.Marshal]::SecureStringToBSTR($RegTokenSecure))
+            $RegistrationToken = $RegistrationToken.Trim()
+
+            # Validate format: GitHub registration tokens are ~29 uppercase alphanumeric chars
+            if ($RegistrationToken -match '^[A-Z0-9]{20,40}$') {
+                Write-Host "[OK] Token format looks valid ($($RegistrationToken.Length) chars, starts with '$($RegistrationToken.Substring(0,4))**')." -ForegroundColor Green
+                break
+            }
+
+            Write-Host ""
+            Write-Host "  [!] Token format looks wrong:" -ForegroundColor Red
+            Write-Host "      Got  : $($RegistrationToken.Length) chars -- '$($RegistrationToken.Substring(0, [Math]::Min(6,$RegistrationToken.Length)))...'" -ForegroundColor Red
+            Write-Host "      Expect: ~29 uppercase letters/digits only" -ForegroundColor Red
+            Write-Host ""
+            Write-Host "  Common mistakes:" -ForegroundColor Yellow
+            Write-Host "    - Copied the whole line instead of just the token value" -ForegroundColor Yellow
+            Write-Host "      Wrong : ./config.cmd --url https://... --token ABCD1234..." -ForegroundColor Yellow
+            Write-Host "      Correct: ABCD1234..." -ForegroundColor Yellow
+            Write-Host "    - Token has lowercase letters (GitHub tokens are uppercase only)" -ForegroundColor Yellow
+            Write-Host "    - Copied from a markdown link, e.g. [token](token)" -ForegroundColor Yellow
+            Write-Host ""
+
+            if ($attempt -eq $maxAttempts) {
+                throw "Invalid registration token after $maxAttempts attempts. Please generate a new one at:`nhttps://github.com/$repoOwner/$repoName/settings/actions/runners/new"
+            }
+            Write-Host "  Please try again (attempt $attempt/$maxAttempts)..." -ForegroundColor Cyan
+            Write-Host ""
+        }
     } else {
         # ---------------------------------------------------------------------------
         # Mode 1 : Auto-fetch via PAT (default)
