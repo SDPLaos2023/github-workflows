@@ -9,6 +9,8 @@ Centralized GitHub Actions reusable workflows for the **SDPLaos2023** organizati
 1. [Deploy Flow Diagram](#deploy-flow-diagram)
 2. [Installing a Self-Hosted Runner on a New Server](#installing-a-self-hosted-runner-on-a-new-server)
 3. [Creating a deploy.yml for a New Project](#creating-a-deployyml-for-a-new-project)
+   - [วิธีที่ 1 — ให้ AI สร้างให้อัตโนมัติ](#วิธีที่-1--ให้-ai-สร้างให้อัตโนมัติ-แนะนำ)
+   - [วิธีที่ 2 — แก้เองจาก template](#วิธีที่-2--แก้เองจาก-template)
 4. [Inputs Reference](#inputs-reference)
 5. [Real-World Example](#real-world-example)
 6. [Backup Policy](#backup-policy)
@@ -54,6 +56,11 @@ Developer pushes to "Deploy" branch
 > Updating the runner version only requires changing `$RunnerVersion` and `$RunnerHash` in
 > [`Install-GitHubRunner.ps1`](Install-GitHubRunner.ps1) — all projects pick up the change automatically.
 
+**Script URL (raw):**
+```
+https://raw.githubusercontent.com/SDPLaos2023/github-workflows/main/Install-GitHubRunner.ps1
+```
+
 เปิด **PowerShell as Administrator** บน server แล้วรันบรรทัดนี้บรรทัดเดียว:
 
 ```powershell
@@ -75,6 +82,9 @@ Enter credentials (input is hidden)
 ```
 
 Script จะ auto-fetch registration token ผ่าน PAT แล้ว download, verify, extract, configure และ start runner service อัตโนมัติ
+
+> **Per-project template:** สำหรับโปรเจกต์ที่มีค่า config ซ้ำๆ กัน สามารถดูตัวอย่าง pre-filled script ได้ที่
+> [`TEMPLATE-Install-Runner.md`](TEMPLATE-Install-Runner.md) — copy ไปแก้ค่าตามโปรเจกต์แล้วรันได้เลยโดยไม่ต้อง interactive prompt
 
 ตรวจสอบว่า runner ขึ้น **Idle** ที่:
 `https://github.com/<org>/<repo>/settings/actions/runners`
@@ -98,7 +108,35 @@ Script จะ auto-fetch registration token ผ่าน PAT แล้ว downlo
 
 ## Creating a deploy.yml for a New Project
 
-1. Copy [`NEW-PROJECT-TEMPLATE.yml`](NEW-PROJECT-TEMPLATE.yml) from this repository to your project repository at:
+**Template URL (raw):**
+```
+https://raw.githubusercontent.com/SDPLaos2023/github-workflows/main/Deploy-YML-TEMPLATE.yml
+```
+
+### วิธีที่ 1 — ให้ AI สร้างให้อัตโนมัติ (แนะนำ)
+
+Copy prompt ด้านล่างไปวางใน GitHub Copilot / ChatGPT แล้วเติมข้อมูลโปรเจกต์:
+
+```
+ช่วยสร้างไฟล์ deploy.yml สำหรับ GitHub Actions ให้หน่อย โดย:
+
+1. ดึง template จาก URL นี้:
+   https://raw.githubusercontent.com/SDPLaos2023/github-workflows/main/Deploy-YML-TEMPLATE.yml
+
+2. แทนที่ค่า <-- CHANGE THIS ทุกจุด ด้วยข้อมูลโปรเจกต์ต่อไปนี้:
+   - ชื่อโปรเจกต์ (name):          [เช่น Deploy MyApp to IIS]
+   - project_path (.csproj):        [เช่น src/MyApp/MyApp.csproj]
+   - app_pool (IIS App Pool):       [เช่น MyApp_Pool]
+   - deploy_path (path บน server): [เช่น C:\inetpub\wwwroot\MyApp]
+   - backup_prefix:                 [เช่น MyApp]
+   - runner_label:                  [เช่น my-server-runner]
+
+3. Output เฉพาะ YAML content เท่านั้น พร้อมบันทึกที่ .github/workflows/deploy.yml
+```
+
+### วิธีที่ 2 — แก้เองจาก template
+
+1. Copy [`Deploy-YML-TEMPLATE.yml`](Deploy-YML-TEMPLATE.yml) from this repository to your project repository at:
 
    ```
    .github/workflows/deploy.yml
