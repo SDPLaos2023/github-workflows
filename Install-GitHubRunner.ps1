@@ -153,7 +153,7 @@ function Invoke-DeleteRunner {
         $root    = if ($exePath) { Split-Path (Split-Path $exePath -Parent) -Parent } else { "" }
         # Parse owner-repo and runnername from service name: actions.runner.<owner>-<repo>.<runnername>
         $parts     = $svc.Name -replace '^actions\.runner\.','' -split '\.',2
-        $ownerRepo = $parts[0] -replace '-','/',1   # first '-' is org/repo separator
+        $ownerRepo = $parts[0] -replace '^([^-]+)-', '$1/'   # first '-' separates org/repo
         $runnerName= if ($parts.Count -gt 1) { $parts[1] } else { "(unknown)" }
         $runners.Add(@{
             Svc        = $svc
