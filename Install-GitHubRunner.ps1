@@ -2,19 +2,29 @@
 # Install-GitHubRunner.ps1  (CENTRAL SCRIPT — lives in SDPLaos2023/github-workflows)
 #
 # PURPOSE
-#   Reusable script for installing a GitHub Actions self-hosted runner on any
-#   Windows / IIS server in the SDPLaos2023 organisation.
+#   Reusable script for installing or removing a GitHub Actions self-hosted runner
+#   on any Windows / IIS server in the SDPLaos2023 organisation.
 #
 # USAGE
-#   Run this one-liner in an elevated PowerShell on the target server.
-#   Script will prompt for all values interactively — no file to copy or edit:
+#   Run this one-liner in an elevated PowerShell on the target server:
 #
 #   Set-ExecutionPolicy Bypass -Scope Process -Force; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; & ([ScriptBlock]::Create((Invoke-WebRequest 'https://raw.githubusercontent.com/SDPLaos2023/github-workflows/main/Install-GitHubRunner.ps1' -UseBasicParsing).Content))
 #
-# PROMPTS (3 sections)
-#   [1/3] Project Configuration  — RepoUrl, AppPool, DeployPath  (same across servers)
-#   [2/3] Server Configuration   — Windows service account + password  (per-server)
-#   [3/3] GitHub Credentials     — PAT Token  (hidden input)
+# MAIN MENU
+#   [1] Install Runner  — prompts [1/3] Project, [2/3] Server, [3/3] GitHub token
+#   [2] Delete Runner   — lists installed runners, pick one to remove
+#
+# INSTALL STEPS
+#   1. Verify Administrator
+#   2. Check/install Git (auto-updates if missing or outdated)
+#   3. Verify domain account & grant folder permissions
+#   4. Create required directories
+#   5. Download runner zip
+#   6. Validate SHA-256 hash
+#   7. Extract runner archive
+#   8. Configure runner service
+#   9. Start runner service
+#  10. Verify IIS App Pool
 #
 # UPDATING THE RUNNER VERSION
 #   1. Find the new version + SHA-256 hash at:
@@ -119,6 +129,147 @@ function Read-HostWithRetry {
         }
     }
 }
+
+# ---------------------------------------------------------------------------
+# Delete Runner — list installed runners, pick one, remove it
+# ---------------------------------------------------------------------------
+function Invoke-DeleteRunner {
+    Write-Host ""
+    Write-Host "=== Installed GitHub Runners on this machine ===" -ForegroundColor Cyan
+    Write-Host ""
+
+    $services = @(Get-Service "actions.runner.*" -ErrorAction SilentlyContinue)
+    if ($services.Count -eq 0) {
+        Write-Host "  No GitHub Actions runners found on this machine." -ForegroundColor Yellow
+        exit 0
+    }
+
+    # Collect runner details
+    $runners = [System.Collections.Generic.List[hashtable]]::new()
+    foreach ($svc in $services) {
+        $wmiSvc  = Get-WmiObject Win32_Service -Filter "Name='$($svc.Name)'" -ErrorAction SilentlyContinue
+        $exePath = if ($wmiSvc) { $wmiSvc.PathName.Trim('"') -replace '".*','' } else { "" }
+        # RunnerService.exe lives at <root>\bin\RunnerService.exe  →  go up twice
+        $root    = if ($exePath) { Split-Path (Split-Path $exePath -Parent) -Parent } else { "" }
+        # Parse owner-repo and runnername from service name: actions.runner.<owner>-<repo>.<runnername>
+        $parts     = $svc.Name -replace '^actions\.runner\.','' -split '\.',2
+        $ownerRepo = $parts[0] -replace '-','/',1   # first '-' is org/repo separator
+        $runnerName= if ($parts.Count -gt 1) { $parts[1] } else { "(unknown)" }
+        $runners.Add(@{
+            Svc        = $svc
+            Root       = $root
+            OwnerRepo  = $ownerRepo
+            RunnerName = $runnerName
+        })
+    }
+
+    $idx = 1
+    foreach ($r in $runners) {
+        Write-Host ("  [{0}] {1}" -f $idx, $r.Svc.Name) -ForegroundColor White
+        Write-Host ("      Status: {0}" -f $r.Svc.Status)
+        Write-Host ("      Repo  : {0}" -f $r.OwnerRepo)
+        Write-Host ("      Root  : {0}" -f $r.Root)
+        Write-Host ""
+        $idx++
+    }
+
+    $pick = Read-HostWithRetry `
+        -Prompt       "  Select runner to remove [1-$($runners.Count)]" `
+        -Validator    { param($v) $v -match '^\d+$' -and [int]$v -ge 1 -and [int]$v -le $runners.Count } `
+        -ErrorMessage "กรุณาใส่หมายเลข 1-$($runners.Count)"
+    $chosen = $runners[[int]$pick - 1]
+
+    Write-Host ""
+    Write-Host "  Selected : $($chosen.Svc.Name)" -ForegroundColor Yellow
+    Write-Host "  Root     : $($chosen.Root)" -ForegroundColor Yellow
+    Write-Host ""
+
+    # Parse owner and repo for token URL
+    $ownerRepoParts = $chosen.OwnerRepo -split '/',2
+    $owner = $ownerRepoParts[0]
+    $repo  = if ($ownerRepoParts.Count -gt 1) { $ownerRepoParts[1] } else { "" }
+
+    Write-Host "  To fully deregister from GitHub, get a Remove Token at:" -ForegroundColor Cyan
+    Write-Host "  https://github.com/$($chosen.OwnerRepo)/settings/actions/runners" -ForegroundColor Cyan
+    Write-Host "  Click [...] next to the runner → Remove → copy the token shown." -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "  (Press Enter without typing to skip GitHub deregistration — runner will be removed locally only)" -ForegroundColor DarkGray
+    Write-Host ""
+
+    $removeTokenSecure = Read-Host "  Remove Token (hidden, or press Enter to skip)" -AsSecureString
+    $removeToken       = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
+                             [Runtime.InteropServices.Marshal]::SecureStringToBSTR($removeTokenSecure)).Trim()
+
+    # Stop and uninstall the service
+    Write-Host ""
+    Write-Host ">>> Stopping runner service..." -ForegroundColor Cyan
+    if ($chosen.Svc.Status -eq "Running") {
+        Stop-Service -Name $chosen.Svc.Name -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 3
+    }
+    Write-Host "[OK] Service stopped." -ForegroundColor Green
+
+    # Deregister from GitHub via config.cmd (if token provided)
+    if (-not [string]::IsNullOrEmpty($removeToken) -and (Test-Path $chosen.Root)) {
+        $configCmd = Join-Path $chosen.Root "config.cmd"
+        if (Test-Path $configCmd) {
+            Write-Host ">>> Deregistering runner from GitHub..." -ForegroundColor Cyan
+            Set-Location $chosen.Root
+            & $configCmd remove --unattended --token $removeToken
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "[OK] Runner deregistered from GitHub." -ForegroundColor Green
+            } else {
+                Write-Host "[!!] config.cmd remove exited with $LASTEXITCODE — continuing with local removal." -ForegroundColor Yellow
+            }
+        }
+    } else {
+        # Manually uninstall the service without config.cmd
+        Write-Host ">>> Uninstalling service (local only)..." -ForegroundColor Cyan
+        $svcCmd = Join-Path $chosen.Root "svc.cmd"
+        if (Test-Path $svcCmd) {
+            Set-Location $chosen.Root
+            & $svcCmd uninstall 2>&1 | Out-Null
+        } else {
+            & sc.exe delete $chosen.Svc.Name 2>&1 | Out-Null
+        }
+        Write-Host "[OK] Service uninstalled." -ForegroundColor Green
+        Write-Host "[!!] Runner was not deregistered from GitHub — remove it manually at:" -ForegroundColor Yellow
+        Write-Host "     https://github.com/$($chosen.OwnerRepo)/settings/actions/runners" -ForegroundColor Yellow
+    }
+
+    # Delete runner files
+    if (-not [string]::IsNullOrEmpty($chosen.Root) -and (Test-Path $chosen.Root)) {
+        Write-Host ">>> Deleting runner files from $($chosen.Root)..." -ForegroundColor Cyan
+        Remove-Item $chosen.Root -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host "[OK] Runner files deleted." -ForegroundColor Green
+    }
+
+    Write-Host ""
+    Write-Host "============================================================" -ForegroundColor Green
+    Write-Host " Runner '$($chosen.Svc.Name)' removed successfully." -ForegroundColor Green
+    Write-Host "============================================================" -ForegroundColor Green
+    exit 0
+}
+
+# ---------------------------------------------------------------------------
+# Main menu
+# ---------------------------------------------------------------------------
+Write-Host ""
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "  GitHub Runner Manager" -ForegroundColor Cyan
+Write-Host "  Machine: $env:COMPUTERNAME" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "  [1] Install Runner" -ForegroundColor White
+Write-Host "  [2] Delete Runner" -ForegroundColor White
+Write-Host ""
+
+$menuChoice = Read-HostWithRetry `
+    -Prompt    "  Enter choice [1/2]" `
+    -Validator { param($v) $v -eq '1' -or $v -eq '2' } `
+    -ErrorMessage "กรุณาเลือก 1 หรือ 2"
+
+if ($menuChoice -eq '2') { Invoke-DeleteRunner }
 
 # ---------------------------------------------------------------------------
 # Interactive prompts — ask for any value not supplied via parameter
@@ -266,7 +417,59 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 Write-Success "Running as Administrator."
 
 # ---------------------------------------------------------------------------
-# Step 2 : Verify domain user exists & grant folder permissions
+# Step 2 : Check Git installation — auto-install / update if missing or old
+# ---------------------------------------------------------------------------
+Write-Step "Checking Git installation..."
+$minGitMajor = 2
+$gitCmd = Get-Command git -ErrorAction SilentlyContinue
+$needsGit = $false
+
+if ($null -eq $gitCmd) {
+    Write-Warn "Git not found on this machine — will install automatically."
+    $needsGit = $true
+} else {
+    $gitVerRaw = (& git --version 2>&1) -replace 'git version ',''
+    $gitMajor  = [int]($gitVerRaw.Split('.')[0])
+    if ($gitMajor -lt $minGitMajor) {
+        Write-Warn "Git version $gitVerRaw is too old (need $minGitMajor.x+) — will upgrade automatically."
+        $needsGit = $true
+    } else {
+        Write-Success "Git $gitVerRaw is installed and up to date."
+    }
+}
+
+if ($needsGit) {
+    Write-Host "  Fetching latest Git for Windows installer..." -ForegroundColor Cyan
+    try {
+        # Resolve latest release tag from GitHub API
+        $gitRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/git-for-windows/git/releases/latest" -UseBasicParsing
+        $asset      = $gitRelease.assets | Where-Object { $_.name -match '64-bit\.exe$' } | Select-Object -First 1
+        if ($null -eq $asset) { throw "Could not find 64-bit installer asset." }
+
+        $installerPath = Join-Path $env:TEMP $asset.name
+        Write-Host "  Downloading $($asset.name)..." -ForegroundColor Cyan
+        Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $installerPath -UseBasicParsing
+
+        Write-Host "  Installing Git silently (this takes ~30 seconds)..." -ForegroundColor Cyan
+        $proc = Start-Process -FilePath $installerPath `
+                    -ArgumentList "/VERYSILENT /NORESTART /NOCANCEL /SP- /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS /COMPONENTS=`"icons,ext\reg\shellhere,assoc,assoc_sh`"" `
+                    -Wait -PassThru
+        if ($proc.ExitCode -ne 0) { throw "Installer exited with code $($proc.ExitCode)." }
+
+        # Refresh PATH so git is available in this session
+        $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" +
+                    [System.Environment]::GetEnvironmentVariable("Path","User")
+
+        $newVer = (& git --version 2>&1) -replace 'git version ',''
+        Write-Success "Git $newVer installed successfully."
+        Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
+    } catch {
+        Write-Warn "Auto-install failed: $_ — continuing anyway (Git is not required by the runner itself)."
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Step 3 : Verify domain user exists & grant folder permissions
 # ---------------------------------------------------------------------------
 Write-Step "Verifying domain account '$ServiceAccount'..."
 $localUser = $ServiceAccount.Split('\')[-1]
@@ -307,7 +510,7 @@ try {
 }
 
 # ---------------------------------------------------------------------------
-# Step 3 : Create required directories
+# Step 4 : Create required directories
 # ---------------------------------------------------------------------------
 Write-Step "Creating required directories..."
 foreach ($dir in @($RunnerRoot, $BackupPath)) {
@@ -331,7 +534,7 @@ foreach ($dir in @($RunnerRoot, $DeployPath, $BackupPath)) {
 }
 
 # ---------------------------------------------------------------------------
-# Step 4 : Download runner
+# Step 5 : Download runner
 # ---------------------------------------------------------------------------
 $ZipPath = Join-Path $RunnerRoot $RunnerZip
 if (Test-Path $ZipPath) {
@@ -344,7 +547,7 @@ if (Test-Path $ZipPath) {
 }
 
 # ---------------------------------------------------------------------------
-# Step 5 : Validate SHA-256 hash
+# Step 6 : Validate SHA-256 hash
 # ---------------------------------------------------------------------------
 Write-Step "Validating SHA-256 hash..."
 $actualHash = (Get-FileHash -Path $ZipPath -Algorithm SHA256).Hash.ToUpper()
@@ -355,7 +558,7 @@ if ($actualHash -ne $RunnerHash.ToUpper()) {
 Write-Success "Hash validated."
 
 # ---------------------------------------------------------------------------
-# Step 6 : Extract
+# Step 7 : Extract
 # ---------------------------------------------------------------------------
 Write-Step "Extracting runner archive..."
 $configCmd = Join-Path $RunnerRoot "config.cmd"
@@ -374,7 +577,7 @@ if ((Test-Path $configCmd) -and (Test-Path $svcCmd)) {
 }
 
 # ---------------------------------------------------------------------------
-# Step 7 : Configure runner
+# Step 8 : Configure runner
 # ---------------------------------------------------------------------------
 Write-Step "Configuring runner '$RunnerName' with label '$RunnerLabels'..."
 Write-Host "  - URL  : $RepoUrl"
@@ -462,7 +665,7 @@ if ($LASTEXITCODE -ne 0) {
 Write-Success "Runner configured and service installed successfully."
 
 # ---------------------------------------------------------------------------
-# Step 8 : Start service — target ONLY this runner's service
+# Step 9 : Start service — target ONLY this runner's service
 # ---------------------------------------------------------------------------
 Write-Step "Starting GitHub Actions runner service..."
 
@@ -492,7 +695,7 @@ if ($svc.Status -eq "Running") {
 Write-Success "Only this runner's service was touched -- all other services on this machine are untouched."
 
 # ---------------------------------------------------------------------------
-# Step 9 : Verify IIS App Pool
+# Step 10 : Verify IIS App Pool
 # ---------------------------------------------------------------------------
 Write-Step "Verifying IIS App Pool '$AppPool'..."
 Import-Module WebAdministration -ErrorAction SilentlyContinue
