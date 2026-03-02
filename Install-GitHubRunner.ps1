@@ -91,25 +91,66 @@ $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 # ---------------------------------------------------------------------------
+# Helper — retry prompt up to 3 times, then exit on failure
+# ---------------------------------------------------------------------------
+function Read-HostWithRetry {
+    param(
+        [string]      $Prompt,
+        [scriptblock] $Validator,
+        [string]      $ErrorMessage,
+        [switch]      $AsSecureString,
+        [int]         $MaxAttempts = 3
+    )
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        if ($attempt -gt 1) {
+            Write-Host "  [!!] $ErrorMessage  (attempt $attempt/$MaxAttempts)" -ForegroundColor Yellow
+        }
+        if ($AsSecureString) {
+            $secure = Read-Host $Prompt -AsSecureString
+            $plain  = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
+                          [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure))
+        } else {
+            $plain = (Read-Host $Prompt).Trim()
+        }
+        if (& $Validator $plain) { return $plain }
+        if ($attempt -eq $MaxAttempts) {
+            Write-Host "  [ERROR] เกิน $MaxAttempts ครั้งแล้ว — ออกจาก script" -ForegroundColor Red
+            exit 1
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Interactive prompts — ask for any value not supplied via parameter
 # ---------------------------------------------------------------------------
 Write-Host ""
 Write-Host "=== [1/3] Project Configuration (same for every server of this project)" -ForegroundColor Cyan
 
 if ([string]::IsNullOrEmpty($RepoUrl)) {
-    $RepoUrl = Read-Host "  GitHub Repo URL (e.g. https://github.com/SDPLaos2023/MyProject)"
+    $RepoUrl = Read-HostWithRetry `
+        -Prompt       "  GitHub Repo URL (e.g. https://github.com/SDPLaos2023/MyProject)" `
+        -Validator    { param($v) $v -match '^https://github\.com/[^/]+/[^/]+$' } `
+        -ErrorMessage "URL ไม่ถูกต้อง — ต้องขึ้นต้นด้วย https://github.com/Org/Repo"
 } else {
     Write-Host "  Repo URL   : $RepoUrl" -ForegroundColor DarkGray
 }
 # Sanitize URL — strip trailing ) ] spaces and slashes that may come from pasting markdown links
 $RepoUrl = $RepoUrl.Trim().TrimEnd(')', ']', '/', ' ')
+
 if ([string]::IsNullOrEmpty($AppPool)) {
-    $AppPool = Read-Host "  IIS App Pool name"
+    $AppPool = Read-HostWithRetry `
+        -Prompt       "  IIS App Pool name" `
+        -Validator    { param($v) $v -match '^[a-zA-Z0-9_\-\.]+$' } `
+        -ErrorMessage "App Pool name ห้ามมีอักขระพิเศษ"
 } else {
     Write-Host "  AppPool    : $AppPool" -ForegroundColor DarkGray
 }
+
 if ([string]::IsNullOrEmpty($DeployPath)) {
-    $DeployPath = Read-Host "  Deploy path (e.g. C:\inetpub\wwwroot\MyProject)"
+    $DeployPath = Read-HostWithRetry `
+        -Prompt       "  Deploy path (e.g. C:\inetpub\wwwroot\MyProject)" `
+        -Validator    { param($v) $v -match '^[a-zA-Z]:\\' } `
+        -ErrorMessage "Path ต้องเป็น Windows path เช่น C:\inetpub\wwwroot\MyProject"
 } else {
     Write-Host "  DeployPath : $DeployPath" -ForegroundColor DarkGray
 }
@@ -120,14 +161,43 @@ Write-Host "  This is the Windows account that will RUN the runner service on th
 Write-Host "  It must have 'Log on as a service' rights and permission to manage IIS App Pools." -ForegroundColor DarkGray
 Write-Host ""
 
+# Auto-detect domain membership and suggest the correct account format
+$_domainInfo     = Get-WmiObject Win32_ComputerSystem
+$_isJoinedDomain = $_domainInfo.PartOfDomain
+$_detectedDomain = if ($_isJoinedDomain) { $_domainInfo.Domain.Split('.')[0].ToUpper() } else { $env:COMPUTERNAME }
+$_suggestedAcct  = "$_detectedDomain\administrator"
+Write-Host "  Detected  : $(if ($_isJoinedDomain) { "Domain-joined → $_detectedDomain" } else { "Local → $env:COMPUTERNAME" })" -ForegroundColor Cyan
+Write-Host "  Suggested : $_suggestedAcct" -ForegroundColor Cyan
+Write-Host ""
+
 if ([string]::IsNullOrEmpty($ServiceAccount)) {
-    $ServiceAccount = Read-Host "  Windows service account (e.g. sdplao\github-runner)"
+    $ServiceAccount = Read-HostWithRetry `
+        -Prompt       "  Windows service account (e.g. $_suggestedAcct)" `
+        -Validator    {
+            param($v)
+            # Auto-fix .\username → DOMAIN\username
+            if ($v -match '^\.\\.+') {
+                $fixed = "$_detectedDomain\$($v -replace '^\.\\' )"
+                Write-Host "  [Auto-fix] Normalized to: $fixed" -ForegroundColor Cyan
+                $script:ServiceAccount = $fixed
+                return $true
+            }
+            return $v -match '^[a-zA-Z0-9_\-]+\\[a-zA-Z0-9_\-\.]+$'
+        } `
+        -ErrorMessage "รูปแบบต้องเป็น DOMAIN\username หรือ COMPUTER\username"
+    # Apply normalization that may have been set inside the validator
+    if ($ServiceAccount -match '^\.\\.+') {
+        $ServiceAccount = "$_detectedDomain\$($ServiceAccount -replace '^\.\\' )"
+    }
 } else {
     Write-Host "  ServiceAccount: $ServiceAccount" -ForegroundColor DarkGray
 }
-$ServicePwdSecure = Read-Host "  Password for '$ServiceAccount' (hidden)" -AsSecureString
-$ServicePassword  = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
-                        [Runtime.InteropServices.Marshal]::SecureStringToBSTR($ServicePwdSecure))
+
+$ServicePassword = Read-HostWithRetry `
+    -Prompt        "  Password for '$ServiceAccount' (hidden)" `
+    -Validator     { param($v) $v.Length -ge 1 } `
+    -ErrorMessage  "Password ห้ามว่าง" `
+    -AsSecureString
 
 # ---------------------------------------------------------------------------
 # Derive defaults that depend on other parameters
@@ -144,16 +214,8 @@ if ([string]::IsNullOrEmpty($RunnerRoot)) {
 $RunnerZip         = "actions-runner-win-x64-$RunnerVersion.zip"
 $RunnerDownloadUrl = "https://github.com/actions/runner/releases/download/v$RunnerVersion/$RunnerZip"
 
-# $apiHeaders is only available when mode 1 (PAT) is used
-# Initialized to $null here so conflict check can skip safely in mode 2
-$apiHeaders = $null
-
 Write-Host ""
 Write-Host "=== [3/3] GitHub Credentials" -ForegroundColor Cyan
-Write-Host "  Choose authentication method:" -ForegroundColor DarkGray
-Write-Host "  [1] PAT Token  (auto-fetch token — requires repo Admin rights)" -ForegroundColor DarkGray
-Write-Host "  [2] Registration Token  (manual — get from GitHub UI, expires in 1 hour)" -ForegroundColor DarkGray
-Write-Host ""
 
 $repoOwner = $RepoUrl.Split('/')[-2]
 
@@ -161,104 +223,29 @@ if (-not [string]::IsNullOrEmpty($RegistrationToken)) {
     # Token already supplied via parameter — skip prompts
     Write-Host "  Using pre-supplied registration token." -ForegroundColor DarkGray
 } else {
-    $authChoice = Read-Host "  Enter choice [1/2]"
+    Write-Host ""
+    Write-Host "  Get your token at:" -ForegroundColor Yellow
+    Write-Host "  https://github.com/$repoOwner/$repoName/settings/actions/runners/new" -ForegroundColor Yellow
+    Write-Host "  Select Windows, then copy the value after '--token' in the Configure section." -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  Token format: ~29 uppercase letters and digits (e.g. ABCDE12345FGHIJ67890KLMNO1234)" -ForegroundColor DarkGray
+    Write-Host ""
 
-    if ($authChoice -eq '2') {
-        # ---------------------------------------------------------------------------
-        # Mode 2 : Manual registration token (from GitHub UI)
-        # ---------------------------------------------------------------------------
-        Write-Host ""
-        Write-Host "  Get your token at:" -ForegroundColor Yellow
-        Write-Host "  https://github.com/$repoOwner/$repoName/settings/actions/runners/new" -ForegroundColor Yellow
-        Write-Host "  Select Windows, then copy the value after '--token' in the Configure section." -ForegroundColor Yellow
-        Write-Host ""
-        Write-Host "  Token format: ~29 uppercase letters and digits (e.g. ABCDE12345FGHIJ67890KLMNO1234)" -ForegroundColor DarkGray
-        Write-Host ""
-
-        # Loop until a valid-looking token is entered
-        $maxAttempts = 3
-        for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
-            $RegTokenSecure    = Read-Host "  Registration Token (hidden)"  -AsSecureString
-            $RegistrationToken = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
-                                     [Runtime.InteropServices.Marshal]::SecureStringToBSTR($RegTokenSecure))
-            $RegistrationToken = $RegistrationToken.Trim()
-
-            # Validate format: GitHub registration tokens are ~29 uppercase alphanumeric chars
-            if ($RegistrationToken -match '^[A-Z0-9]{20,40}$') {
-                Write-Host "[OK] Token format looks valid ($($RegistrationToken.Length) chars, starts with '$($RegistrationToken.Substring(0,4))**')." -ForegroundColor Green
-                break
+    $RegistrationToken = Read-HostWithRetry `
+        -Prompt        "  Registration Token (hidden)" `
+        -Validator     {
+            param($v)
+            if ($v -match '^[A-Z0-9]{20,40}$') {
+                Write-Host "  [OK] Token format looks valid ($($v.Length) chars, starts with '$($v.Substring(0,4))**')." -ForegroundColor Green
+                return $true
             }
-
-            Write-Host ""
-            Write-Host "  [!] Token format looks wrong:" -ForegroundColor Red
-            Write-Host "      Got  : $($RegistrationToken.Length) chars -- '$($RegistrationToken.Substring(0, [Math]::Min(6,$RegistrationToken.Length)))...'" -ForegroundColor Red
-            Write-Host "      Expect: ~29 uppercase letters/digits only" -ForegroundColor Red
-            Write-Host ""
-            Write-Host "  Common mistakes:" -ForegroundColor Yellow
-            Write-Host "    - Copied the whole line instead of just the token value" -ForegroundColor Yellow
-            Write-Host "      Wrong : ./config.cmd --url https://... --token ABCD1234..." -ForegroundColor Yellow
-            Write-Host "      Correct: ABCD1234..." -ForegroundColor Yellow
-            Write-Host "    - Token has lowercase letters (GitHub tokens are uppercase only)" -ForegroundColor Yellow
-            Write-Host "    - Copied from a markdown link, e.g. [token](token)" -ForegroundColor Yellow
-            Write-Host ""
-
-            if ($attempt -eq $maxAttempts) {
-                throw "Invalid registration token after $maxAttempts attempts. Please generate a new one at:`nhttps://github.com/$repoOwner/$repoName/settings/actions/runners/new"
-            }
-            Write-Host "  Please try again (attempt $attempt/$maxAttempts)..." -ForegroundColor Cyan
-            Write-Host ""
-        }
-    } else {
-        # ---------------------------------------------------------------------------
-        # Mode 1 : Auto-fetch via PAT (default)
-        # ---------------------------------------------------------------------------
-        $PatTokenSecure = Read-Host "  GitHub PAT Token (repo + workflow scope, hidden)" -AsSecureString
-        $PatToken       = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
-                              [Runtime.InteropServices.Marshal]::SecureStringToBSTR($PatTokenSecure))
-
-        $apiHeaders = @{
-            Authorization = "token $PatToken"
-            Accept        = "application/vnd.github.v3+json"
-            "User-Agent"  = "PowerShell-RunnerInstaller"
-        }
-
-        # Verify PAT identity
-        try {
-            $whoami = Invoke-RestMethod -Uri "https://api.github.com/user" -Headers $apiHeaders -Method GET
-            Write-Host "[OK] PAT belongs to GitHub user: $($whoami.login)" -ForegroundColor Green
-        } catch {
-            throw "PAT Token is invalid or expired.`nGenerate a new one at: https://github.com/settings/tokens`nRequired scopes: repo, workflow"
-        }
-
-        # Fetch registration token
-        Write-Host ""
-        Write-Host "Fetching registration token via PAT..." -ForegroundColor Cyan
-        $apiUrl = "https://api.github.com/repos/$repoOwner/$repoName/actions/runners/registration-token"
-        try {
-            $tokenResponse     = Invoke-RestMethod -Uri $apiUrl -Method POST -Headers $apiHeaders
-            $RegistrationToken = $tokenResponse.token
-            Write-Host "[OK] Registration token obtained (expires: $($tokenResponse.expires_at))." -ForegroundColor Green
-        } catch {
-            $statusCode = $_.Exception.Response.StatusCode.value__
-            Write-Host ""
-            Write-Host "  ERROR: Could not get registration token (HTTP $statusCode)" -ForegroundColor Red
-            Write-Host ""
-            Write-Host "  Common causes:" -ForegroundColor Yellow
-            Write-Host "    1) PAT owner is not an Admin of repo '$repoOwner/$repoName'" -ForegroundColor Yellow
-            Write-Host "       -> Go to: https://github.com/$repoOwner/$repoName/settings/access" -ForegroundColor Yellow
-            Write-Host "    2) Classic PAT is missing 'repo' scope" -ForegroundColor Yellow
-            Write-Host "       -> Go to: https://github.com/settings/tokens" -ForegroundColor Yellow
-            Write-Host "    3) Fine-grained PAT is missing 'Administration: Read & Write' permission" -ForegroundColor Yellow
-            Write-Host "       -> Go to: https://github.com/settings/personal-access-tokens" -ForegroundColor Yellow
-            Write-Host "    4) Repo '$repoOwner/$repoName' does not exist or is misspelled" -ForegroundColor Yellow
-            Write-Host ""
-            Write-Host "  TIP: If you don't have Admin rights, use option [2] instead." -ForegroundColor Cyan
-            Write-Host "       Ask the repo Admin to open:" -ForegroundColor Cyan
-            Write-Host "       https://github.com/$repoOwner/$repoName/settings/actions/runners/new" -ForegroundColor Cyan
-            Write-Host "       and give you the '--token XXXX' value." -ForegroundColor Cyan
-            throw "Failed to obtain runner registration token."
-        }
-    }
+            Write-Host "      Got  : $($v.Length) chars -- '$($v.Substring(0, [Math]::Min(6,$v.Length)))...'" -ForegroundColor Red
+            Write-Host "      Expect: 20-40 uppercase letters/digits only — ใส่แค่ token เท่านั้น ไม่ใส่ทั้งบรรทัด" -ForegroundColor Yellow
+            Write-Host "      Common mistake: copied whole line './config.cmd --url ... --token XXXX' instead of just XXXX" -ForegroundColor Yellow
+            return $false
+        } `
+        -ErrorMessage  "Token ไม่ถูกต้อง กรุณาลองใหม่" `
+        -AsSecureString
 }
 
 # ---------------------------------------------------------------------------
@@ -431,26 +418,10 @@ if (Test-Path $runnerConfigFile) {
 }
 
 # ---------------------------------------------------------------------------
-# Pre-flight: verify no name collision with runners from OTHER repos on GitHub
+# Pre-flight: runner name conflict check (skipped — using registration token only)
 # ---------------------------------------------------------------------------
 Write-Step "Checking for runner name conflicts on GitHub..."
-if ($null -eq $apiHeaders) {
-    Write-Warn "Skipping conflict check -- no PAT available (mode 2)."
-} else {
-    try {
-        $listUrl     = "https://api.github.com/repos/$repoOwner/$repoName/actions/runners"
-        $listResp    = Invoke-RestMethod -Uri $listUrl -Method GET -Headers $apiHeaders
-        $ghRunners   = $listResp.runners | Where-Object { $_.name -eq $RunnerName }
-        if ($ghRunners) {
-            Write-Warn "Runner named '$RunnerName' is already registered for this repo on GitHub."
-            Write-Warn "It will be replaced during configuration (this is expected for reinstall)."
-        } else {
-            Write-Success "No name conflict found -- '$RunnerName' is available."
-        }
-    } catch {
-        Write-Warn "Could not check existing runners via API: $_ -- continuing anyway."
-    }
-}
+Write-Warn "Skipping conflict check -- using registration token (no PAT). If a runner named '$RunnerName' already exists it will be reported by config.cmd below."
 
 $configArgs = @(
     "--url",                  $RepoUrl,

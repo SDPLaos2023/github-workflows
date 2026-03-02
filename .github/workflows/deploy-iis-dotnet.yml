@@ -85,7 +85,28 @@ jobs:
           }
 
       # -----------------------------------------------------------------------
-      # 5. Backup: zip current deploy folder → C:\BackupIIS\<prefix>_YYYYMMDD_HHmmss.zip
+      # 5. Remove unwanted folders from publish output before deploy
+      #    dotnet publish output should never contain these, but guard anyway
+      #    so a misconfigured build never accidentally deploys source-control
+      #    or intermediate build artefacts to IIS.
+      # -----------------------------------------------------------------------
+      - name: Clean publish output
+        shell: powershell
+        run: |
+          $PublishDir   = Join-Path $env:GITHUB_WORKSPACE "publish"
+          $Unwanted     = @('.github', 'obj', 'bin', '.git', '.vs')
+
+          foreach ($folder in $Unwanted) {
+            $target = Join-Path $PublishDir $folder
+            if (Test-Path $target) {
+              Remove-Item $target -Recurse -Force
+              Write-Host "Removed: $target"
+            }
+          }
+          Write-Host "Publish output is clean."
+
+      # -----------------------------------------------------------------------
+      # 6. Backup: zip current deploy folder → C:\BackupIIS\<prefix>_YYYYMMDD_HHmmss.zip
       #    Skip quietly when the deploy folder does not yet exist (first deploy)
       #    Prune oldest archives so only backup_keep files are retained
       # -----------------------------------------------------------------------
@@ -167,7 +188,7 @@ jobs:
           Write-Host ('Backup retention: kept ' + $KeptCount + ' of ' + $TotalCount + ' archives.')
 
       # -----------------------------------------------------------------------
-      # 6. Stop IIS Application Pool (wait up to 30 s for Stopped state)
+      # 7. Stop IIS Application Pool (wait up to 30 s for Stopped state)
       # -----------------------------------------------------------------------
       - name: Stop Application Pool
         shell: powershell
@@ -199,7 +220,7 @@ jobs:
           }
 
       # -----------------------------------------------------------------------
-      # 7. Deploy with robocopy
+      # 8. Deploy with robocopy
       #    robocopy exit codes: 0-7 = success (files copied/skipped/same)
       #                         8+  = error
       # -----------------------------------------------------------------------
@@ -232,7 +253,7 @@ jobs:
           exit 0
 
       # -----------------------------------------------------------------------
-      # 8. Start IIS Application Pool (wait up to 30 s for Started state)
+      # 9. Start IIS Application Pool (wait up to 30 s for Started state)
       # -----------------------------------------------------------------------
       - name: Start Application Pool
         shell: powershell
@@ -261,7 +282,7 @@ jobs:
           Write-Host "Application Pool started successfully."
 
       # -----------------------------------------------------------------------
-      # 9. Verify: App Pool state = Started AND primary .dll exists
+      # 10. Verify: App Pool state = Started AND primary .dll exists
       # -----------------------------------------------------------------------
       - name: Verify deployment
         shell: powershell
