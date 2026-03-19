@@ -191,7 +191,35 @@ Script จะสร้างไฟล์ `.github/workflows/deploy-nuxt.yml` อ
   -Force
 ```
 
-  ---
+### ตัวอย่างพร้อมใช้: `SDP_WEB_WorkCalendar`
+
+Project path (local): `C:\Users\khamt\Documents\SDP_WEB_WorkCalendar`
+
+```yaml
+name: Deploy WorkCalendar (Nuxt) to IIS
+
+on:
+  push:
+    branches:
+      - Deploy
+
+jobs:
+  call-deploy:
+    uses: SDPLaos2023/github-workflows/.github/workflows/deploy-iis-nuxt.yml@main
+
+    with:
+      app_pool: 'WorkCalendar_Pool'
+      deploy_path: 'C:\inetpub\wwwroot\WorkCalendar'
+      backup_prefix: 'WorkCalendar'
+      runner_label: 'MY-SERVER'
+      package_manager: 'npm'
+      node_version: '20'
+      build_script: 'build'
+      build_output: '.output/public'
+      backup_keep: 5
+```
+
+---
 
 ## ลบ Runner
 
@@ -419,6 +447,35 @@ Service account ของ runner ต้องมี **FullControl** บน `depl
 
 - ตรวจสอบว่า `project_path` ชี้ไปที่ `.csproj` ที่ถูกต้อง
 - ชื่อ DLL มาจากชื่อไฟล์ `.csproj` เช่น `MyApp.csproj` → `MyApp.dll`
+
+### Nuxt Deploy ล้มเหลว — `npm ci` error / lockfile mismatch
+
+ให้ `package_manager` ตรงกับ lockfile ใน repo:
+
+- `pnpm-lock.yaml` → ใช้ `pnpm`
+- `yarn.lock` → ใช้ `yarn`
+- `package-lock.json` → ใช้ `npm`
+
+และถ้าจำเป็นให้ regenerate lockfile ในเครื่อง dev แล้ว commit เข้า repo ก่อน deploy
+
+### Nuxt Deploy ล้มเหลว — Build output not found
+
+ตรวจค่า `build_output` ให้ตรงกับผลลัพธ์จริงของโปรเจกต์:
+
+- Nuxt static ส่วนใหญ่ใช้ `.output/public`
+- บางโปรเจกต์ใช้ `dist`
+
+แนะนำเช็คใน runner machine ด้วย:
+
+```powershell
+Get-ChildItem .\ -Force
+Get-ChildItem .\.output -Force -ErrorAction SilentlyContinue
+Get-ChildItem .\dist -Force -ErrorAction SilentlyContinue
+```
+
+### Nuxt Deploy ล้มเหลว — Node version ไม่ตรง
+
+ตั้ง `node_version` ใน workflow ให้ตรงกับโปรเจกต์ (เช่น `18` หรือ `20`) และให้สอดคล้องกับ `engines` ใน `package.json`
 
 ### เช็คค่าต่างๆ ของ runner ที่ติดตั้งอยู่
 
