@@ -23,7 +23,10 @@ jobs:
       # ---- REQUIRED inputs -----------------------------------------------
 
       # Relative path to your .csproj from the root of THIS repository
-      # Example: "src/MyApp/MyApp.csproj"
+      # How to read it:
+      #   Repo root + src/MyApp/MyApp.csproj -> project_path: 'src/MyApp/MyApp.csproj'
+      #   Repo root + Tagat/Tagat.csproj     -> project_path: 'Tagat/Tagat.csproj'
+      # Do NOT put absolute path like C:\Users\Admin\...\Tagat.csproj
       project_path: 'src/MyApp/MyApp.csproj'   # <-- CHANGE THIS
 
       # Exact name of the IIS Application Pool on the target server
