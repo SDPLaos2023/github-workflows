@@ -6,10 +6,10 @@ Centralized GitHub Actions reusable workflows and runner management scripts for 
 
 ## สารบัญ
 
-- [ติดตั้ง Runner บน Server ใหม่](#ติดตั้ง-runner-บน-server-ใหม่)
+- [ติดตั้ง Runner บน Server ใหม่](#ติดตั้ง-runner-บน-server-ใหม่) ← **เริ่มต้นที่นี่ (ครั้งแรก)**
+- [สร้าง deploy.yml อัตโนมัติ (สคริปต์)](#สร้าง-deployyml-อัตโนมัติ-สคริปต์) ← **ทำต่อในทุกโปรเจกต์**
 - [ลบ Runner](#ลบ-runner)
-- [สร้าง deploy.yml อัตโนมัติ (สคริปต์)](#สร้าง-deployyml-อัตโนมัติ-สคริปต์) ← **แนะนำ**
-- [สร้าง deploy.yml สำหรับโปรเจกต์ใหม่ (manual)](#สร้าง-deployyml-สำหรับโปรเจกต์ใหม่)
+- [สร้าง deploy.yml สำหรับโปรเจกต์ใหม่ (manual)](#สร้าง-deployyml-สำหรับโปรเจกต์ใหม่-manual)
 - [Deploy Flow](#deploy-flow)
 - [Troubleshooting](#troubleshooting)
 
@@ -81,35 +81,6 @@ https://github.com/SDPLaos2023/<repo>/settings/actions/runners
 
 ---
 
-## ลบ Runner
-
-รัน script เดิม แล้วเลือก **[2] Delete Runner**:
-
-```
-=== Installed GitHub Runners on this machine ===
-
-  [1] actions.runner.SDPLaos2023-SDP_WEB_AUTOBACKUP.TDP-IMMIGRATION
-      Status: Running
-      Repo  : SDPLaos2023/SDP_WEB_AUTOBACKUP
-      Root  : C:\actions-runner\SDP_WEB_AUTOBACKUP
-
-Select runner to remove [1-1]: 1
-```
-
-Script จะถามหา Remove Token เพื่อ deregister จาก GitHub:
-
-```
-  Get token at: https://github.com/SDPLaos2023/SDP_WEB_AUTOBACKUP/settings/actions/runners
-  Click [...] next to the runner → Remove → copy the token
-
-  Remove Token (press Enter to skip = local removal only): ****
-```
-
-- **ใส่ token** → ลบออกจาก GitHub + ลบ service + ลบ files
-- **กด Enter ข้าม** → ลบ service + ลบ files เฉยๆ (ต้องไปลบเองที่ GitHub Settings)
-
----
-
 ## สร้าง deploy.yml อัตโนมัติ (สคริปต์)
 
 > **แนะนำวิธีนี้** — Script จะหา `.csproj` ให้เอง ตั้งค่า default ให้เกือบทั้งหมด และสร้างไฟล์ให้เลยโดยไม่ต้อง copy-paste
@@ -163,7 +134,7 @@ Script จะดำเนินการให้อัตโนมัติ:
 | หัวข้อ | รายละเอียด |
 |---|---|
 | รันจากไหน | ต้องรันจาก **root folder ของ project** (ที่มีโฟลเดอร์ `.git`) |
-| หลาย .csproj | Script จะแสดงรายการให้เลือก 1 rrayการ |
+| หลาย .csproj | Script จะแสดงรายการให้เลือก 1 รายการ |
 | ค่า default | ทุกค่าจะ suggest อัตโนมัติ — กด Enter เพื่อใช้ค่านั้นทันที |
 | deploy.yml มีอยู่แล้ว | Script จะถาม Overwrite / Backup / Cancel |
 | Script นี้ vs Runner installer | คนละตัวกัน — **Script นี้สร้าง workflow เท่านั้น** ไม่ติดตั้ง Runner |
@@ -182,7 +153,40 @@ Script จะดำเนินการให้อัตโนมัติ:
 
 ---
 
-## สร้าง deploy.yml สำหรับโปรเจกต์ใหม่
+## ลบ Runner
+
+รัน script เดิม แล้วเลือก **[2] Delete Runner**:
+
+```powershell
+Set-ExecutionPolicy Bypass -Scope Process -Force; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; & ([ScriptBlock]::Create((Invoke-WebRequest 'https://raw.githubusercontent.com/SDPLaos2023/github-workflows/main/Install-GitHubRunner.ps1' -UseBasicParsing).Content))
+```
+
+```
+=== Installed GitHub Runners on this machine ===
+
+  [1] actions.runner.SDPLaos2023-SDP_WEB_AUTOBACKUP.TDP-IMMIGRATION
+      Status: Running
+      Repo  : SDPLaos2023/SDP_WEB_AUTOBACKUP
+      Root  : C:\actions-runner\SDP_WEB_AUTOBACKUP
+
+Select runner to remove [1-1]: 1
+```
+
+Script จะถามหา Remove Token เพื่อ deregister จาก GitHub:
+
+```
+  Get token at: https://github.com/SDPLaos2023/SDP_WEB_AUTOBACKUP/settings/actions/runners
+  Click [...] next to the runner → Remove → copy the token
+
+  Remove Token (press Enter to skip = local removal only): ****
+```
+
+- **ใส่ token** → ลบออกจาก GitHub + ลบ service + ลบ files
+- **กด Enter ข้าม** → ลบ service + ลบ files เฉยๆ (ต้องไปลบเองที่ GitHub Settings)
+
+---
+
+## สร้าง deploy.yml สำหรับโปรเจกต์ใหม่ (manual)
 
 > วิธีนี้ใช้ในกรณีที่ต้องการ copy template ด้วยตนเอง — ถ้าต้องการให้สร้างให้อัตโนมัติ ดูหัวข้อ [สร้าง deploy.yml อัตโนมัติ (สคริปต์)](#สร้าง-deployyml-อัตโนมัติ-สคริปต์) ด้านบน
 
