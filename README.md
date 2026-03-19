@@ -8,7 +8,8 @@ Centralized GitHub Actions reusable workflows and runner management scripts for 
 
 - [ติดตั้ง Runner บน Server ใหม่](#ติดตั้ง-runner-บน-server-ใหม่)
 - [ลบ Runner](#ลบ-runner)
-- [สร้าง deploy.yml สำหรับโปรเจกต์ใหม่](#สร้าง-deployyml-สำหรับโปรเจกต์ใหม่)
+- [สร้าง deploy.yml อัตโนมัติ (สคริปต์)](#สร้าง-deployyml-อัตโนมัติ-สคริปต์) ← **แนะนำ**
+- [สร้าง deploy.yml สำหรับโปรเจกต์ใหม่ (manual)](#สร้าง-deployyml-สำหรับโปรเจกต์ใหม่)
 - [Deploy Flow](#deploy-flow)
 - [Troubleshooting](#troubleshooting)
 
@@ -109,7 +110,81 @@ Script จะถามหา Remove Token เพื่อ deregister จาก G
 
 ---
 
+## สร้าง deploy.yml อัตโนมัติ (สคริปต์)
+
+> **แนะนำวิธีนี้** — Script จะหา `.csproj` ให้เอง ตั้งค่า default ให้เกือบทั้งหมด และสร้างไฟล์ให้เลยโดยไม่ต้อง copy-paste
+
+### วิธีใช้ (One-Liner)
+
+เปิด **PowerShell** ใน **root folder ของ project** (โฟลเดอร์ที่มี `.git`) แล้วรันบรรทัดนี้:
+
+```powershell
+Set-ExecutionPolicy Bypass -Scope Process -Force; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; & ([ScriptBlock]::Create((Invoke-WebRequest 'https://raw.githubusercontent.com/SDPLaos2023/github-workflows/main/Generate-DeployYml.ps1' -UseBasicParsing).Content))
+```
+
+Script จะดำเนินการให้อัตโนมัติ:
+
+```
+========================================================
+  Generate Deploy Workflow
+  (.github/workflows/deploy.yml)
+  Machine: YOUR-SERVER
+========================================================
+
+>>> [1/5] ค้นหา Git repo root...
+  [OK] Repo root : C:\src\MyProject
+
+>>> [2/5] ค้นหาไฟล์ .csproj...
+  [OK] พบ .csproj : src/MyApp/MyApp.csproj
+
+>>> [3/5] IIS & Runner Settings...
+  IIS App Pool name [MyApp_Pool] :
+  Deploy path (Windows full path) [C:\inetpub\wwwroot\MyApp] :
+  Backup prefix [MyApp] :
+  Runner label (ชื่อเครื่อง server ที่ติดตั้ง Runner ไว้) [YOUR-SERVER] :
+
+>>> [4/5] Preview...
+  project_path  : src/MyApp/MyApp.csproj
+  app_pool      : MyApp_Pool
+  deploy_path   : C:\inetpub\wwwroot\MyApp
+  backup_prefix : MyApp
+  runner_label  : YOUR-SERVER
+  backup_keep   : 5 (default)
+  branch trigger: Deploy (fixed)
+
+  ดำเนินการต่อ? สร้าง .github/workflows/deploy.yml [Y/n] :
+
+>>> [5/5] สร้างไฟล์ deploy.yml...
+  [OK] สร้างไฟล์สำเร็จ : C:\src\MyProject\.github\workflows\deploy.yml
+```
+
+### ข้อควรรู้
+
+| หัวข้อ | รายละเอียด |
+|---|---|
+| รันจากไหน | ต้องรันจาก **root folder ของ project** (ที่มีโฟลเดอร์ `.git`) |
+| หลาย .csproj | Script จะแสดงรายการให้เลือก 1 rrayการ |
+| ค่า default | ทุกค่าจะ suggest อัตโนมัติ — กด Enter เพื่อใช้ค่านั้นทันที |
+| deploy.yml มีอยู่แล้ว | Script จะถาม Overwrite / Backup / Cancel |
+| Script นี้ vs Runner installer | คนละตัวกัน — **Script นี้สร้าง workflow เท่านั้น** ไม่ติดตั้ง Runner |
+
+### Parameter Mode (ไม่ต้องกรอกทีละช่อง)
+
+```powershell
+.\Generate-DeployYml.ps1 `
+    -ProjectPath  'src/MyApp/MyApp.csproj' `
+    -AppPool      'MyApp_Pool' `
+    -DeployPath   'C:\inetpub\wwwroot\MyApp' `
+    -BackupPrefix 'MyApp' `
+    -RunnerLabel  'MY-SERVER' `
+    -Force
+```
+
+---
+
 ## สร้าง deploy.yml สำหรับโปรเจกต์ใหม่
+
+> วิธีนี้ใช้ในกรณีที่ต้องการ copy template ด้วยตนเอง — ถ้าต้องการให้สร้างให้อัตโนมัติ ดูหัวข้อ [สร้าง deploy.yml อัตโนมัติ (สคริปต์)](#สร้าง-deployyml-อัตโนมัติ-สคริปต์) ด้านบน
 
 Copy [`Deploy-YML-TEMPLATE.yml`](Deploy-YML-TEMPLATE.yml) ไปไว้ที่ `.github/workflows/deploy.yml` ในโปรเจกต์ แล้วแก้ค่าที่ marked `# <-- CHANGE THIS`:
 
