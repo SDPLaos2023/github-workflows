@@ -6,483 +6,127 @@ Centralized GitHub Actions reusable workflows and runner management scripts for 
 
 ## สารบัญ
 
-- [ติดตั้ง Runner บน Server ใหม่](#ติดตั้ง-runner-บน-server-ใหม่) ← **เริ่มต้นที่นี่ (ครั้งแรก)**
-- [สร้าง deploy.yml อัตโนมัติ (สคริปต์) - .NET](#สร้าง-deployyml-อัตโนมัติ-สคริปต์---net) ← **ทำต่อในโปรเจกต์ .NET**
-- [สร้าง deploy-nuxt.yml อัตโนมัติ (สคริปต์) - Nuxt](#สร้าง-deploy-nuxtyml-อัตโนมัติ-สคริปต์---nuxt) ← **เส้นแยกสำหรับ Nuxt**
+- [ติดตั้ง Runner บน Server ใหม่](#ติดตั้ง-runner-บน-server-ใหม่)
+- [สร้าง deploy.yml อัตโนมัติ - .NET](#สร้าง-deployyml-อัตโนมัติ---net)
+- [สร้าง deploy-nuxt.yml อัตโนมัติ - Nuxt](#สร้าง-deploy-nuxtyml-อัตโนมัติ---nuxt)
 - [ลบ Runner](#ลบ-runner)
-- [สร้าง deploy.yml สำหรับโปรเจกต์ใหม่ (manual) - .NET](#สร้าง-deployyml-สำหรับโปรเจกต์ใหม่-manual---net)
-- [สร้าง deploy-nuxt.yml สำหรับโปรเจกต์ใหม่ (manual) - Nuxt](#สร้าง-deploy-nuxtyml-สำหรับโปรเจกต์ใหม่-manual---nuxt)
-- [Deploy Flow](#deploy-flow)
+- [ไฟล์ Template](#ไฟล์-template)
 - [Troubleshooting](#troubleshooting)
 
 ---
 
 ## ติดตั้ง Runner บน Server ใหม่
 
-เปิด **PowerShell as Administrator** บน server แล้วรันบรรทัดเดียว:
+เปิด **PowerShell as Administrator** บน server แล้วรัน:
 
 ```powershell
 Set-ExecutionPolicy Bypass -Scope Process -Force; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; & ([ScriptBlock]::Create((Invoke-WebRequest 'https://raw.githubusercontent.com/SDPLaos2023/github-workflows/main/Install-GitHubRunner.ps1' -UseBasicParsing).Content))
 ```
 
-Script จะแสดงเมนู:
+หมายเหตุ:
 
-```
-========================================
-  GitHub Runner Manager
-  Machine: YOUR-SERVER
-========================================
-
-  [1] Install Runner
-  [2] Delete Runner
-
-  Enter choice [1/2]:
-```
-
-เลือก **1** แล้วกรอกข้อมูลตามที่ถาม:
-
-```
-=== [1/3] Project Configuration ===
-  GitHub Repo URL   : https://github.com/SDPLaos2023/MyProject
-  IIS App Pool name : MyProject
-  Deploy path       : C:\inetpub\wwwroot\MyProject
-
-=== [2/3] Server Configuration ===
-  Detected  : Domain-joined → SDPLAO
-  Suggested : SDPLAO\administrator
-  Windows service account : SDPLAO\administrator
-  Password for 'SDPLAO\administrator' : ****
-
-=== [3/3] GitHub Credentials ===
-  Get your token at: https://github.com/SDPLaos2023/MyProject/settings/actions/runners/new
-  Select Windows → copy the value after '--token'
-  Registration Token : ****
-```
-
-Script จะดำเนินการให้อัตโนมัติ:
-1. ตรวจสอบ Administrator
-2. เช็ค / อัปเดต Git อัตโนมัติ
-3. ตรวจสอบ domain account
-4. สร้าง folder (`C:\actions-runner\<repo>`, `C:\BackupIIS`)
-5. Download + verify runner
-6. Extract + configure + start service
-
-หลังเสร็จ ตรวจสอบ runner สถานะ **Idle** ที่:
-```
-https://github.com/SDPLaos2023/<repo>/settings/actions/runners
-```
-
-### ข้อควรรู้
-
-| หัวข้อ | รายละเอียด |
-|---|---|
-| Service account | ต้องเป็น `DOMAIN\username` — script detect และแนะนำให้อัตโนมัติ ถ้าใส่ `.\xxx` จะ auto-fix ให้ |
-| Registration Token | หมดอายุ 1 ชั่วโมง — ถ้า script หยุดกลางทาง ให้ generate token ใหม่ก่อนรันใหม่ |
-| รัน script ซ้ำ | ถ้า runner มีอยู่แล้ว script จะถามว่าจะ reinstall ไหม |
-| Git | ถ้าไม่มีหรือเวอร์ชันเก่า script จะ download และ install ให้อัตโนมัติ |
+- ใช้ script นี้สำหรับ **ติดตั้ง / ลบ Runner**
+- หลังติดตั้งเสร็จ ให้ไปสร้าง workflow deploy ใน repo ของโปรเจกต์ต่อด้านล่าง
 
 ---
 
-## สร้าง deploy.yml อัตโนมัติ (สคริปต์) - .NET
+## สร้าง deploy.yml อัตโนมัติ - .NET
 
-> **แนะนำวิธีนี้** — Script จะหา `.csproj` ให้เอง ตั้งค่า default ให้เกือบทั้งหมด และสร้างไฟล์ให้เลยโดยไม่ต้อง copy-paste
-
-### วิธีใช้ (One-Liner)
-
-เปิด **PowerShell** ใน **root folder ของ project** (โฟลเดอร์ที่มี `.git`) แล้วรันบรรทัดนี้:
+เปิด **PowerShell** ใน **root folder ของ repo .NET** แล้วรัน:
 
 ```powershell
 Set-ExecutionPolicy Bypass -Scope Process -Force; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; & ([ScriptBlock]::Create((Invoke-WebRequest 'https://raw.githubusercontent.com/SDPLaos2023/github-workflows/main/Generate-DeployYml.ps1' -UseBasicParsing).Content))
 ```
 
-Script จะดำเนินการให้อัตโนมัติ:
+ผลลัพธ์:
 
-```
-========================================================
-  Generate Deploy Workflow
-  (.github/workflows/deploy.yml)
-  Machine: YOUR-SERVER
-========================================================
+- สร้างไฟล์ `.github/workflows/deploy.yml`
+- หา `.csproj` ให้อัตโนมัติ
+- ถ้ามีหลาย `.csproj` จะให้เลือก
+- ถ้ามีไฟล์เดิม จะถาม overwrite / backup / cancel
 
->>> [1/5] ค้นหา Git repo root...
-  [OK] Repo root : C:\src\MyProject
+ไฟล์ที่เกี่ยวข้อง:
 
->>> [2/5] ค้นหาไฟล์ .csproj...
-  [OK] พบ .csproj : src/MyApp/MyApp.csproj
-
->>> [3/5] IIS & Runner Settings...
-  IIS App Pool name [MyApp_Pool] :
-  Deploy path (Windows full path) [C:\inetpub\wwwroot\MyApp] :
-  Backup prefix [MyApp] :
-  Runner label (ชื่อเครื่อง server ที่ติดตั้ง Runner ไว้) [YOUR-SERVER] :
-
->>> [4/5] Preview...
-  project_path  : src/MyApp/MyApp.csproj
-  app_pool      : MyApp_Pool
-  deploy_path   : C:\inetpub\wwwroot\MyApp
-  backup_prefix : MyApp
-  runner_label  : YOUR-SERVER
-  backup_keep   : 5 (default)
-  branch trigger: Deploy (fixed)
-
-  ดำเนินการต่อ? สร้าง .github/workflows/deploy.yml [Y/n] :
-
->>> [5/5] สร้างไฟล์ deploy.yml...
-  [OK] สร้างไฟล์สำเร็จ : C:\src\MyProject\.github\workflows\deploy.yml
-```
-
-### ข้อควรรู้
-
-| หัวข้อ | รายละเอียด |
-|---|---|
-| รันจากไหน | ต้องรันจาก **root folder ของ project** (ที่มีโฟลเดอร์ `.git`) |
-| หลาย .csproj | Script จะแสดงรายการให้เลือก 1 รายการ |
-| ค่า default | ทุกค่าจะ suggest อัตโนมัติ — กด Enter เพื่อใช้ค่านั้นทันที |
-| deploy.yml มีอยู่แล้ว | Script จะถาม Overwrite / Backup / Cancel |
-| Script นี้ vs Runner installer | คนละตัวกัน — **Script นี้สร้าง workflow เท่านั้น** ไม่ติดตั้ง Runner |
-
-### Parameter Mode (ไม่ต้องกรอกทีละช่อง)
-
-```powershell
-.\Generate-DeployYml.ps1 `
-    -ProjectPath  'src/MyApp/MyApp.csproj' `
-    -AppPool      'MyApp_Pool' `
-    -DeployPath   'C:\inetpub\wwwroot\MyApp' `
-    -BackupPrefix 'MyApp' `
-    -RunnerLabel  'MY-SERVER' `
-    -Force
-```
+- [`Generate-DeployYml.ps1`](Generate-DeployYml.ps1)
+- [`Deploy-YML-TEMPLATE.yml`](Deploy-YML-TEMPLATE.yml)
+- [`.github/workflows/deploy-iis-dotnet.yml`](.github/workflows/deploy-iis-dotnet.yml)
 
 ---
 
-## สร้าง deploy-nuxt.yml อัตโนมัติ (สคริปต์) - Nuxt
+## สร้าง deploy-nuxt.yml อัตโนมัติ - Nuxt
 
-> ใช้เส้นนี้สำหรับ **Nuxt/Node project** โดยเฉพาะ และยังใช้ Runner ตัวเดิมร่วมได้
-
-### วิธีใช้ (One-Liner)
-
-เปิด **PowerShell** ใน **root folder ของ Nuxt project** (โฟลเดอร์ที่มี `.git` และ `package.json`) แล้วรัน:
+เปิด **PowerShell** ใน **root folder ของ repo Nuxt** แล้วรัน:
 
 ```powershell
 Set-ExecutionPolicy Bypass -Scope Process -Force; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; & ([ScriptBlock]::Create((Invoke-WebRequest 'https://raw.githubusercontent.com/SDPLaos2023/github-workflows/main/Generate-DeployYml-Nuxt.ps1' -UseBasicParsing).Content))
 ```
 
-Script จะสร้างไฟล์ `.github/workflows/deploy-nuxt.yml` อัตโนมัติ พร้อมค่า default:
+ผลลัพธ์:
 
-- `app_pool`: `<repo>_Pool`
-- `deploy_path`: `C:\inetpub\wwwroot\<repo>`
-- `backup_prefix`: `<repo>`
-- `runner_label`: `COMPUTERNAME`
-- `package_manager`: auto-detect จาก lockfile (`pnpm-lock.yaml` / `yarn.lock` / default `npm`)
-- `build_output`: default `.output/public` (หรือ `dist` ถ้าพบ)
+- สร้างไฟล์ `.github/workflows/deploy-nuxt.yml`
+- ใช้กับ repo ที่มี `package.json`
+- พยายาม detect `package_manager` และ `build_output` ให้อัตโนมัติ
+- ถ้ามีไฟล์เดิม จะถาม overwrite / backup / cancel
 
-### Parameter Mode (Nuxt)
+ไฟล์ที่เกี่ยวข้อง:
 
-```powershell
-.\Generate-DeployYml-Nuxt.ps1 `
-  -AppPool       'WorkCalendar_Pool' `
-  -DeployPath    'C:\inetpub\wwwroot\WorkCalendar' `
-  -BackupPrefix  'WorkCalendar' `
-  -RunnerLabel   'MY-SERVER' `
-  -PackageManager 'npm' `
-  -NodeVersion   '20' `
-  -BuildScript   'build' `
-  -BuildOutput   '.output/public' `
-  -Force
-```
-
-### ตัวอย่างพร้อมใช้: `SDP_WEB_WorkCalendar`
-
-Project path (local): `C:\Users\khamt\Documents\SDP_WEB_WorkCalendar`
-
-```yaml
-name: Deploy WorkCalendar (Nuxt) to IIS
-
-on:
-  push:
-    branches:
-      - Deploy
-
-jobs:
-  call-deploy:
-    uses: SDPLaos2023/github-workflows/.github/workflows/deploy-iis-nuxt.yml@main
-
-    with:
-      app_pool: 'WorkCalendar_Pool'
-      deploy_path: 'C:\inetpub\wwwroot\WorkCalendar'
-      backup_prefix: 'WorkCalendar'
-      runner_label: 'MY-SERVER'
-      package_manager: 'npm'
-      node_version: '20'
-      build_script: 'build'
-      build_output: '.output/public'
-      backup_keep: 5
-```
+- [`Generate-DeployYml-Nuxt.ps1`](Generate-DeployYml-Nuxt.ps1)
+- [`Deploy-YML-NUXT-TEMPLATE.yml`](Deploy-YML-NUXT-TEMPLATE.yml)
+- [`.github/workflows/deploy-iis-nuxt.yml`](.github/workflows/deploy-iis-nuxt.yml)
 
 ---
 
 ## ลบ Runner
 
-รัน script เดิม แล้วเลือก **[2] Delete Runner**:
+เปิด **PowerShell as Administrator** บน server แล้วรัน script เดิม:
 
 ```powershell
 Set-ExecutionPolicy Bypass -Scope Process -Force; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; & ([ScriptBlock]::Create((Invoke-WebRequest 'https://raw.githubusercontent.com/SDPLaos2023/github-workflows/main/Install-GitHubRunner.ps1' -UseBasicParsing).Content))
 ```
 
-```
-=== Installed GitHub Runners on this machine ===
-
-  [1] actions.runner.SDPLaos2023-SDP_WEB_AUTOBACKUP.TDP-IMMIGRATION
-      Status: Running
-      Repo  : SDPLaos2023/SDP_WEB_AUTOBACKUP
-      Root  : C:\actions-runner\SDP_WEB_AUTOBACKUP
-
-Select runner to remove [1-1]: 1
-```
-
-Script จะถามหา Remove Token เพื่อ deregister จาก GitHub:
-
-```
-  Get token at: https://github.com/SDPLaos2023/SDP_WEB_AUTOBACKUP/settings/actions/runners
-  Click [...] next to the runner → Remove → copy the token
-
-  Remove Token (press Enter to skip = local removal only): ****
-```
-
-- **ใส่ token** → ลบออกจาก GitHub + ลบ service + ลบ files
-- **กด Enter ข้าม** → ลบ service + ลบ files เฉยๆ (ต้องไปลบเองที่ GitHub Settings)
+จากนั้นเลือกเมนู `2`
 
 ---
 
-## สร้าง deploy.yml สำหรับโปรเจกต์ใหม่ (manual) - .NET
+## ไฟล์ Template
 
-> วิธีนี้ใช้ในกรณีที่ต้องการ copy template ด้วยตนเอง — ถ้าต้องการให้สร้างให้อัตโนมัติ ดูหัวข้อ [สร้าง deploy.yml อัตโนมัติ (สคริปต์) - .NET](#สร้าง-deployyml-อัตโนมัติ-สคริปต์---net) ด้านบน
+- .NET manual template: [`Deploy-YML-TEMPLATE.yml`](Deploy-YML-TEMPLATE.yml)
+- Nuxt manual template: [`Deploy-YML-NUXT-TEMPLATE.yml`](Deploy-YML-NUXT-TEMPLATE.yml)
 
-Copy [`Deploy-YML-TEMPLATE.yml`](Deploy-YML-TEMPLATE.yml) ไปไว้ที่ `.github/workflows/deploy.yml` ในโปรเจกต์ แล้วแก้ค่าที่ marked `# <-- CHANGE THIS`:
+ถ้าต้องการสร้างเองแบบ manual:
 
-| ค่า | ตัวอย่าง |
-|---|---|
-| `project_path` | `src/MyApp/MyApp.csproj` |
-| `app_pool` | `MyApp_Pool` |
-| `deploy_path` | `C:\inetpub\wwwroot\MyApp` |
-| `backup_prefix` | `MyApp` |
-| `runner_label` | ชื่อ runner (ค่าเดียวกับ `RunnerName` ตอนติดตั้ง = COMPUTERNAME) |
-
-### วิธีดูค่า `project_path` (กันงง)
-
-- ใช้ **path แบบ relative จาก root ของ repo** ไปหาไฟล์ `.csproj`
-- ถ้า repo มี `src/MyApp/MyApp.csproj` ให้ใส่ `src/MyApp/MyApp.csproj`
-- ถ้า repo มี `Tagat/Tagat.csproj` ให้ใส่ `Tagat/Tagat.csproj`
-- ห้ามใส่ path เต็มเครื่อง เช่น `C:\Users\Admin\Documents\...`
-
-### Template: `.github/workflows/deploy.yml`
-
-```yaml
-# ============================================================
-# NEW PROJECT DEPLOY TEMPLATE
-# Instructions:
-#   1. Copy this file into your project repo at:
-#        .github/workflows/deploy.yml
-#   2. Replace every value marked with  <-- CHANGE THIS
-#   3. Commit and push to the "Deploy" branch to trigger
-# ============================================================
-
-name: Deploy to IIS   # <-- CHANGE THIS  (display name shown in Actions tab)
-
-on:
-  push:
-    branches:
-      - Deploy          # trigger only when commits land on the Deploy branch
-
-jobs:
-  call-deploy:
-    # Delegate all work to the shared reusable workflow in the central repo
-    uses: SDPLaos2023/github-workflows/.github/workflows/deploy-iis-dotnet.yml@main
-
-    with:
-      # ---- REQUIRED inputs -----------------------------------------------
-
-      # Relative path to your .csproj from the root of THIS repository
-      # How to read it:
-      #   Repo root + src/MyApp/MyApp.csproj -> project_path: 'src/MyApp/MyApp.csproj'
-      #   Repo root + Tagat/Tagat.csproj     -> project_path: 'Tagat/Tagat.csproj'
-      # Do NOT put absolute path like C:\Users\Admin\...\Tagat.csproj
-      project_path: 'src/MyApp/MyApp.csproj'   # <-- CHANGE THIS
-
-      # Exact name of the IIS Application Pool on the target server
-      # Find it in IIS Manager > Application Pools
-      app_pool: 'MyApp_Pool'                    # <-- CHANGE THIS
-
-      # Full filesystem path on the server where IIS serves the app
-      # This folder will be wiped and replaced on every deploy
-      deploy_path: 'C:\inetpub\wwwroot\MyApp'  # <-- CHANGE THIS
-
-      # Short identifier used as a prefix for backup archive names
-      # Allowed characters: letters, digits, hyphens, underscores
-      # Result example: MyApp_20260224_153000.zip
-      backup_prefix: 'MyApp'                    # <-- CHANGE THIS
-
-      # Label of the self-hosted GitHub Actions runner attached to the
-      # target Windows server.  Must match a label configured in:
-      #   GitHub > Settings > Actions > Runners
-      runner_label: 'my-server-runner'          # <-- CHANGE THIS
-
-      # ---- OPTIONAL inputs (defaults shown — remove line to use default) ---
-
-      # Number of backup archives to keep in C:\BackupIIS for this project.
-      # Oldest archives beyond this count are deleted automatically.
-      # Default: 5
-      backup_keep: 5
-```
-
-หรือใช้ AI สร้างให้:
-
-```
-ช่วยสร้างไฟล์ deploy.yml จาก template:
-https://raw.githubusercontent.com/SDPLaos2023/github-workflows/main/Deploy-YML-TEMPLATE.yml
-
-แทนค่า <-- CHANGE THIS ด้วย:
-- project_path:  src/MyApp/MyApp.csproj
-- app_pool:      MyApp_Pool
-- deploy_path:   C:\inetpub\wwwroot\MyApp
-- backup_prefix: MyApp
-- runner_label:  MY-SERVER
-```
-
----
-
-## สร้าง deploy-nuxt.yml สำหรับโปรเจกต์ใหม่ (manual) - Nuxt
-
-Copy [`Deploy-YML-NUXT-TEMPLATE.yml`](Deploy-YML-NUXT-TEMPLATE.yml) ไปไว้ที่ `.github/workflows/deploy-nuxt.yml` ในโปรเจกต์ Nuxt แล้วแก้ค่า `# <-- CHANGE THIS`:
-
-| ค่า | ตัวอย่าง |
-|---|---|
-| `app_pool` | `WorkCalendar_Pool` |
-| `deploy_path` | `C:\inetpub\wwwroot\WorkCalendar` |
-| `backup_prefix` | `WorkCalendar` |
-| `runner_label` | `MY-SERVER` |
-| `package_manager` | `npm` / `pnpm` / `yarn` |
-| `node_version` | `20` |
-| `build_script` | `build` |
-| `build_output` | `.output/public` หรือ `dist` |
-
----
-
-## Deploy Flow
-
-```
-push to "Deploy" branch
-        │
-        ▼
-GitHub Actions (project repo)
-        │  calls reusable workflow
-        ▼
-SDPLaos2023/github-workflows
-deploy-iis-dotnet.yml@main
-        │
-  1. Checkout
-  2. dotnet restore
-  3. dotnet publish → ./publish/
-  4. Clean publish output (.github, obj, bin)
-  5. Backup current deploy → C:\BackupIIS\<prefix>_YYYYMMDD_HHmmss.zip
-  6. Stop IIS App Pool
-  7. robocopy publish/ → deploy_path
-  8. Start IIS App Pool
-  9. Verify (pool Started + .dll exists)
-        │
-        ▼
-     Done
-```
-
-**Backup retention:** เก็บ 5 ไฟล์ล่าสุดต่อโปรเจกต์ (ปรับได้ด้วย `backup_keep`)
+- .NET: copy ไปไว้ที่ `.github/workflows/deploy.yml`
+- Nuxt: copy ไปไว้ที่ `.github/workflows/deploy-nuxt.yml`
 
 ---
 
 ## Troubleshooting
 
-### Runner ไม่ขึ้น Idle บน GitHub
+### Runner ไม่ขึ้นบน GitHub
 
 ```powershell
-# ดูสถานะ service
 Get-Service "actions.runner.*"
-
-# Start ถ้า Stopped
 Start-Service "actions.runner.*"
-
-# ดู log
 Get-Content "C:\actions-runner\<repo>\_diag\Runner_*.log" -Tail 50
 ```
 
-### ติดตั้ง runner แล้ว error "identity references could not be translated"
+### Service account format ผิด
 
-Service account format ผิด — ต้องระบุเป็น `DOMAIN\username` ไม่ใช่ `.\username`
-
-```powershell
-whoami  # ดูว่า domain จริงๆ คืออะไร เช่น sdplao\administrator
-```
-
-แล้วรัน script ใหม่ ใส่ค่าที่ถูกต้อง (script จะ detect และแนะนำให้อัตโนมัติ)
-
-### Registration Token หมดอายุ
-
-Token มีอายุ 1 ชั่วโมง ถ้า script ค้างนานแล้วใส่ token ไม่ผ่าน:
-1. ไปที่ `https://github.com/<org>/<repo>/settings/actions/runners/new`
-2. Generate token ใหม่
-3. รัน script ใหม่ (folder ที่สร้างค้างไว้จะถูก skip หรือถามว่า reinstall)
-
-### Deploy ล้มเหลว — App Pool ไม่หยุดใน 30 วินาที
-
-App Pool มี long-running request หรือ locked file — kill worker process ด้วยตนเองใน IIS Manager แล้ว re-trigger workflow
-
-### Deploy ล้มเหลว — robocopy exit code 8+
+ต้องใช้รูปแบบ `DOMAIN\username` ไม่ใช่ `.\username`
 
 ```powershell
-# เช็ค permission ของ deploy_path
-Get-Acl "C:\inetpub\wwwroot\MyApp" | Format-List
+whoami
 ```
 
-Service account ของ runner ต้องมี **FullControl** บน `deploy_path`
+### Nuxt build output ไม่ตรง
 
-### Verify ล้มเหลว — DLL not found
+ใช้ค่า `build_output` ให้ตรงกับโปรเจกต์ เช่น:
 
-- ตรวจสอบว่า `project_path` ชี้ไปที่ `.csproj` ที่ถูกต้อง
-- ชื่อ DLL มาจากชื่อไฟล์ `.csproj` เช่น `MyApp.csproj` → `MyApp.dll`
+- `.output/public`
+- `dist`
 
-### Nuxt Deploy ล้มเหลว — `npm ci` error / lockfile mismatch
+### Package manager ไม่ตรงกับ lockfile
 
-ให้ `package_manager` ตรงกับ lockfile ใน repo:
-
-- `pnpm-lock.yaml` → ใช้ `pnpm`
-- `yarn.lock` → ใช้ `yarn`
-- `package-lock.json` → ใช้ `npm`
-
-และถ้าจำเป็นให้ regenerate lockfile ในเครื่อง dev แล้ว commit เข้า repo ก่อน deploy
-
-### Nuxt Deploy ล้มเหลว — Build output not found
-
-ตรวจค่า `build_output` ให้ตรงกับผลลัพธ์จริงของโปรเจกต์:
-
-- Nuxt static ส่วนใหญ่ใช้ `.output/public`
-- บางโปรเจกต์ใช้ `dist`
-
-แนะนำเช็คใน runner machine ด้วย:
-
-```powershell
-Get-ChildItem .\ -Force
-Get-ChildItem .\.output -Force -ErrorAction SilentlyContinue
-Get-ChildItem .\dist -Force -ErrorAction SilentlyContinue
-```
-
-### Nuxt Deploy ล้มเหลว — Node version ไม่ตรง
-
-ตั้ง `node_version` ใน workflow ให้ตรงกับโปรเจกต์ (เช่น `18` หรือ `20`) และให้สอดคล้องกับ `engines` ใน `package.json`
-
-### เช็คค่าต่างๆ ของ runner ที่ติดตั้งอยู่
-
-```powershell
-# ดู runner ทั้งหมดในเครื่อง
-Get-Service "actions.runner.*" | Select-Object Name, Status
-
-# ดู config ของ runner
-Get-Content "C:\actions-runner\<repo>\.runner" | ConvertFrom-Json
-```
+- `package-lock.json` → `npm`
+- `pnpm-lock.yaml` → `pnpm`
+- `yarn.lock` → `yarn`
