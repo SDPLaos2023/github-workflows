@@ -1,0 +1,47 @@
+# ============================================================
+# NEW NUXT PROJECT DEPLOY TEMPLATE (IIS)
+# Instructions:
+#   1. Copy this file into your Nuxt project at:
+#        .github/workflows/deploy-nuxt.yml
+#   2. Replace every value marked with  <-- CHANGE THIS
+#   3. Commit and push to the "Deploy" branch to trigger
+# ============================================================
+
+name: Deploy Nuxt to IIS   # <-- CHANGE THIS (display name shown in Actions tab)
+
+on:
+  push:
+    branches:
+      - Deploy
+
+jobs:
+  call-deploy:
+    uses: SDPLaos2023/github-workflows/.github/workflows/deploy-iis-nuxt.yml@main
+
+    with:
+      # Exact name of the IIS Application Pool on the target server
+      app_pool: 'MyNuxtApp_Pool'                    # <-- CHANGE THIS
+
+      # Full filesystem path on the server where IIS serves this site
+      deploy_path: 'C:\inetpub\wwwroot\MyNuxtApp' # <-- CHANGE THIS
+
+      # Prefix used in backup archive names
+      backup_prefix: 'MyNuxtApp'                    # <-- CHANGE THIS
+
+      # Runner label on target server (must match installed runner label)
+      runner_label: 'MY-SERVER'                     # <-- CHANGE THIS
+
+      # Package manager used by this project: npm | pnpm | yarn
+      package_manager: 'npm'                        # <-- CHANGE THIS (if needed)
+
+      # Node.js version used to build
+      node_version: '20'                            # <-- CHANGE THIS (if needed)
+
+      # Build script name from package.json scripts
+      build_script: 'build'                         # <-- CHANGE THIS (if needed)
+
+      # Folder to deploy after build (common: .output/public or dist)
+      build_output: '.output/public'                # <-- CHANGE THIS
+
+      # Optional backup retention count
+      backup_keep: 5

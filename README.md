@@ -7,9 +7,11 @@ Centralized GitHub Actions reusable workflows and runner management scripts for 
 ## สารบัญ
 
 - [ติดตั้ง Runner บน Server ใหม่](#ติดตั้ง-runner-บน-server-ใหม่) ← **เริ่มต้นที่นี่ (ครั้งแรก)**
-- [สร้าง deploy.yml อัตโนมัติ (สคริปต์)](#สร้าง-deployyml-อัตโนมัติ-สคริปต์) ← **ทำต่อในทุกโปรเจกต์**
+- [สร้าง deploy.yml อัตโนมัติ (สคริปต์) - .NET](#สร้าง-deployyml-อัตโนมัติ-สคริปต์---net) ← **ทำต่อในโปรเจกต์ .NET**
+- [สร้าง deploy-nuxt.yml อัตโนมัติ (สคริปต์) - Nuxt](#สร้าง-deploy-nuxtyml-อัตโนมัติ-สคริปต์---nuxt) ← **เส้นแยกสำหรับ Nuxt**
 - [ลบ Runner](#ลบ-runner)
-- [สร้าง deploy.yml สำหรับโปรเจกต์ใหม่ (manual)](#สร้าง-deployyml-สำหรับโปรเจกต์ใหม่-manual)
+- [สร้าง deploy.yml สำหรับโปรเจกต์ใหม่ (manual) - .NET](#สร้าง-deployyml-สำหรับโปรเจกต์ใหม่-manual---net)
+- [สร้าง deploy-nuxt.yml สำหรับโปรเจกต์ใหม่ (manual) - Nuxt](#สร้าง-deploy-nuxtyml-สำหรับโปรเจกต์ใหม่-manual---nuxt)
 - [Deploy Flow](#deploy-flow)
 - [Troubleshooting](#troubleshooting)
 
@@ -81,7 +83,7 @@ https://github.com/SDPLaos2023/<repo>/settings/actions/runners
 
 ---
 
-## สร้าง deploy.yml อัตโนมัติ (สคริปต์)
+## สร้าง deploy.yml อัตโนมัติ (สคริปต์) - .NET
 
 > **แนะนำวิธีนี้** — Script จะหา `.csproj` ให้เอง ตั้งค่า default ให้เกือบทั้งหมด และสร้างไฟล์ให้เลยโดยไม่ต้อง copy-paste
 
@@ -153,6 +155,44 @@ Script จะดำเนินการให้อัตโนมัติ:
 
 ---
 
+## สร้าง deploy-nuxt.yml อัตโนมัติ (สคริปต์) - Nuxt
+
+> ใช้เส้นนี้สำหรับ **Nuxt/Node project** โดยเฉพาะ และยังใช้ Runner ตัวเดิมร่วมได้
+
+### วิธีใช้ (One-Liner)
+
+เปิด **PowerShell** ใน **root folder ของ Nuxt project** (โฟลเดอร์ที่มี `.git` และ `package.json`) แล้วรัน:
+
+```powershell
+Set-ExecutionPolicy Bypass -Scope Process -Force; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; & ([ScriptBlock]::Create((Invoke-WebRequest 'https://raw.githubusercontent.com/SDPLaos2023/github-workflows/main/Generate-DeployYml-Nuxt.ps1' -UseBasicParsing).Content))
+```
+
+Script จะสร้างไฟล์ `.github/workflows/deploy-nuxt.yml` อัตโนมัติ พร้อมค่า default:
+
+- `app_pool`: `<repo>_Pool`
+- `deploy_path`: `C:\inetpub\wwwroot\<repo>`
+- `backup_prefix`: `<repo>`
+- `runner_label`: `COMPUTERNAME`
+- `package_manager`: auto-detect จาก lockfile (`pnpm-lock.yaml` / `yarn.lock` / default `npm`)
+- `build_output`: default `.output/public` (หรือ `dist` ถ้าพบ)
+
+### Parameter Mode (Nuxt)
+
+```powershell
+.\Generate-DeployYml-Nuxt.ps1 `
+  -AppPool       'WorkCalendar_Pool' `
+  -DeployPath    'C:\inetpub\wwwroot\WorkCalendar' `
+  -BackupPrefix  'WorkCalendar' `
+  -RunnerLabel   'MY-SERVER' `
+  -PackageManager 'npm' `
+  -NodeVersion   '20' `
+  -BuildScript   'build' `
+  -BuildOutput   '.output/public' `
+  -Force
+```
+
+  ---
+
 ## ลบ Runner
 
 รัน script เดิม แล้วเลือก **[2] Delete Runner**:
@@ -186,9 +226,9 @@ Script จะถามหา Remove Token เพื่อ deregister จาก G
 
 ---
 
-## สร้าง deploy.yml สำหรับโปรเจกต์ใหม่ (manual)
+## สร้าง deploy.yml สำหรับโปรเจกต์ใหม่ (manual) - .NET
 
-> วิธีนี้ใช้ในกรณีที่ต้องการ copy template ด้วยตนเอง — ถ้าต้องการให้สร้างให้อัตโนมัติ ดูหัวข้อ [สร้าง deploy.yml อัตโนมัติ (สคริปต์)](#สร้าง-deployyml-อัตโนมัติ-สคริปต์) ด้านบน
+> วิธีนี้ใช้ในกรณีที่ต้องการ copy template ด้วยตนเอง — ถ้าต้องการให้สร้างให้อัตโนมัติ ดูหัวข้อ [สร้าง deploy.yml อัตโนมัติ (สคริปต์) - .NET](#สร้าง-deployyml-อัตโนมัติ-สคริปต์---net) ด้านบน
 
 Copy [`Deploy-YML-TEMPLATE.yml`](Deploy-YML-TEMPLATE.yml) ไปไว้ที่ `.github/workflows/deploy.yml` ในโปรเจกต์ แล้วแก้ค่าที่ marked `# <-- CHANGE THIS`:
 
@@ -280,6 +320,23 @@ https://raw.githubusercontent.com/SDPLaos2023/github-workflows/main/Deploy-YML-T
 - backup_prefix: MyApp
 - runner_label:  MY-SERVER
 ```
+
+---
+
+## สร้าง deploy-nuxt.yml สำหรับโปรเจกต์ใหม่ (manual) - Nuxt
+
+Copy [`Deploy-YML-NUXT-TEMPLATE.yml`](Deploy-YML-NUXT-TEMPLATE.yml) ไปไว้ที่ `.github/workflows/deploy-nuxt.yml` ในโปรเจกต์ Nuxt แล้วแก้ค่า `# <-- CHANGE THIS`:
+
+| ค่า | ตัวอย่าง |
+|---|---|
+| `app_pool` | `WorkCalendar_Pool` |
+| `deploy_path` | `C:\inetpub\wwwroot\WorkCalendar` |
+| `backup_prefix` | `WorkCalendar` |
+| `runner_label` | `MY-SERVER` |
+| `package_manager` | `npm` / `pnpm` / `yarn` |
+| `node_version` | `20` |
+| `build_script` | `build` |
+| `build_output` | `.output/public` หรือ `dist` |
 
 ---
 

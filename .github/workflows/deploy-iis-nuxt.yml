@@ -1,0 +1,257 @@
+name: Deploy Nuxt to IIS
+
+# Reusable workflow — call this from any Nuxt project repository
+on:
+  workflow_call:
+    inputs:
+      app_pool:
+        description: 'IIS Application Pool name'
+        required: true
+        type: string
+      deploy_path:
+        description: 'Full destination path on the server (e.g. C:\inetpub\wwwroot\MyNuxtApp)'
+        required: true
+        type: string
+      backup_prefix:
+        description: 'Prefix used for backup zip file name (e.g. MyNuxtApp)'
+        required: true
+        type: string
+      runner_label:
+        description: 'Label of the self-hosted runner that hosts this IIS site'
+        required: true
+        type: string
+      package_manager:
+        description: 'npm | pnpm | yarn'
+        required: false
+        type: string
+        default: 'npm'
+      node_version:
+        description: 'Node.js major version'
+        required: false
+        type: string
+        default: '20'
+      build_script:
+        description: 'Package script used for build'
+        required: false
+        type: string
+        default: 'build'
+      build_output:
+        description: 'Folder to deploy after build (e.g. .output/public or dist)'
+        required: false
+        type: string
+        default: '.output/public'
+      backup_keep:
+        description: 'Maximum number of backup archives to retain per project'
+        required: false
+        type: number
+        default: 5
+
+jobs:
+  deploy:
+    runs-on: ${{ inputs.runner_label }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+
+      - name: Install dependencies
+        shell: powershell
+        run: |
+          $pm = "${{ inputs.package_manager }}".ToLower()
+          if ($pm -eq "pnpm") {
+            corepack enable
+            pnpm install --frozen-lockfile
+          } elseif ($pm -eq "yarn") {
+            corepack enable
+            yarn install --frozen-lockfile
+          } else {
+            npm ci
+          }
+
+      - name: Build Nuxt
+        shell: powershell
+        run: |
+          $pm = "${{ inputs.package_manager }}".ToLower()
+          $script = "${{ inputs.build_script }}"
+
+          if ($pm -eq "pnpm") {
+            pnpm run $script
+          } elseif ($pm -eq "yarn") {
+            yarn $script
+          } else {
+            npm run $script
+          }
+
+      - name: Validate build output
+        shell: powershell
+        run: |
+          $OutputDir = Join-Path $env:GITHUB_WORKSPACE "${{ inputs.build_output }}"
+          if (-not (Test-Path $OutputDir)) {
+            Write-Error "Build output folder not found: $OutputDir"
+            exit 1
+          }
+
+          $fileCount = (Get-ChildItem -Path $OutputDir -Recurse -File -ErrorAction SilentlyContinue | Measure-Object).Count
+          if ($fileCount -eq 0) {
+            Write-Error "Build output folder is empty: $OutputDir"
+            exit 1
+          }
+
+          Write-Host "Build output ready: $OutputDir ($fileCount files)"
+
+      - name: Backup current deployment
+        shell: powershell
+        run: |
+          $DeployPath  = "${{ inputs.deploy_path }}"
+          $Prefix      = "${{ inputs.backup_prefix }}"
+          $BackupDir   = "C:\BackupIIS"
+          $KeepCount   = ${{ inputs.backup_keep }}
+
+          if (-not (Test-Path $DeployPath)) {
+            Write-Host ('Deploy path ' + $DeployPath + ' does not exist - skipping backup.')
+            exit 0
+          }
+
+          if (-not (Test-Path $BackupDir)) {
+            New-Item -ItemType Directory -Path $BackupDir -Force | Out-Null
+            Write-Host ('Created backup directory: ' + $BackupDir)
+          }
+
+          $Timestamp   = Get-Date -Format 'yyyyMMdd_HHmmss'
+          $ArchiveName = $Prefix + '_' + $Timestamp + '.zip'
+          $ArchivePath = Join-Path $BackupDir $ArchiveName
+
+          Write-Host ('Creating backup: ' + $ArchivePath)
+          Add-Type -AssemblyName System.IO.Compression
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+
+          $ZipStream   = [System.IO.File]::Open($ArchivePath, [System.IO.FileMode]::Create)
+          $ZipArchive  = New-Object System.IO.Compression.ZipArchive($ZipStream, [System.IO.Compression.ZipArchiveMode]::Create)
+          $ShareFlags  = [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete
+          $SkippedFiles = 0
+
+          Get-ChildItem -Path $DeployPath -Recurse -File | ForEach-Object {
+            $RelPath = $_.FullName.Substring($DeployPath.TrimEnd('\').Length).TrimStart('\')
+            try {
+              $fs    = [System.IO.File]::Open($_.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, $ShareFlags)
+              $entry = $ZipArchive.CreateEntry($RelPath, [System.IO.Compression.CompressionLevel]::Optimal)
+              $es    = $entry.Open()
+              $fs.CopyTo($es)
+              $es.Dispose()
+              $fs.Dispose()
+            } catch {
+              Write-Warning ('Skipping locked file: ' + $RelPath + ' - ' + $_.Exception.Message)
+              $SkippedFiles++
+            }
+          }
+
+          $ZipArchive.Dispose()
+          $ZipStream.Dispose()
+
+          if ($SkippedFiles -gt 0) {
+            Write-Warning ('Backup completed with ' + $SkippedFiles + ' skipped locked file(s).')
+          }
+          if (-not (Test-Path $ArchivePath)) {
+            Write-Error ('Backup archive was not created: ' + $ArchivePath)
+            exit 1
+          }
+
+          $Archives = Get-ChildItem -Path $BackupDir -Filter ($Prefix + '_*.zip') |
+                      Sort-Object LastWriteTime -Descending
+          $ToDelete = $Archives | Select-Object -Skip $KeepCount
+          foreach ($File in $ToDelete) {
+            Remove-Item $File.FullName -Force
+          }
+
+      - name: Stop Application Pool
+        shell: powershell
+        run: |
+          $PoolName = "${{ inputs.app_pool }}"
+          $Timeout  = 30
+
+          Import-Module WebAdministration -ErrorAction Stop
+
+          if ((Get-WebAppPoolState -Name $PoolName).Value -eq 'Started') {
+            Stop-WebAppPool -Name $PoolName
+
+            $Elapsed = 0
+            do {
+              Start-Sleep -Seconds 2
+              $Elapsed += 2
+              $CurrentState = (Get-WebAppPoolState -Name $PoolName).Value
+            } while ($CurrentState -ne 'Stopped' -and $Elapsed -lt $Timeout)
+
+            if ((Get-WebAppPoolState -Name $PoolName).Value -ne 'Stopped') {
+              Write-Error "Application Pool '$PoolName' did not stop within ${Timeout}s."
+              exit 1
+            }
+          }
+
+      - name: Deploy files with robocopy
+        shell: powershell
+        run: |
+          $Source      = Join-Path $env:GITHUB_WORKSPACE "${{ inputs.build_output }}"
+          $Destination = "${{ inputs.deploy_path }}"
+
+          if (-not (Test-Path $Destination)) {
+            New-Item -ItemType Directory -Path $Destination -Force | Out-Null
+          }
+
+          # /MIR mirrors output to destination to remove stale assets
+          robocopy $Source $Destination /MIR /R:3 /W:5 /NP
+
+          if ($LASTEXITCODE -ge 8) {
+            Write-Error "robocopy failed with exit code $LASTEXITCODE"
+            exit $LASTEXITCODE
+          }
+          exit 0
+
+      - name: Start Application Pool
+        shell: powershell
+        run: |
+          $PoolName = "${{ inputs.app_pool }}"
+          $Timeout  = 30
+
+          Import-Module WebAdministration -ErrorAction Stop
+          Start-WebAppPool -Name $PoolName
+
+          $Elapsed = 0
+          do {
+            Start-Sleep -Seconds 2
+            $Elapsed += 2
+            $CurrentState = (Get-WebAppPoolState -Name $PoolName).Value
+          } while ($CurrentState -ne 'Started' -and $Elapsed -lt $Timeout)
+
+          if ((Get-WebAppPoolState -Name $PoolName).Value -ne 'Started') {
+            Write-Error "Application Pool '$PoolName' did not reach Started state within ${Timeout}s."
+            exit 1
+          }
+
+      - name: Verify deployment
+        shell: powershell
+        run: |
+          $DeployPath = "${{ inputs.deploy_path }}"
+          if (-not (Test-Path $DeployPath)) {
+            Write-Error "Deploy path not found: $DeployPath"
+            exit 1
+          }
+
+          $fileCount = (Get-ChildItem -Path $DeployPath -Recurse -File -ErrorAction SilentlyContinue | Measure-Object).Count
+          if ($fileCount -eq 0) {
+            Write-Error "Deploy path is empty after deployment."
+            exit 1
+          }
+
+          $indexPath = Join-Path $DeployPath "index.html"
+          if (Test-Path $indexPath) {
+            Write-Host "index.html verified: $indexPath"
+          } else {
+            Write-Warning "index.html not found (this can be normal for some builds)."
+          }
+
+          Write-Host "Deployment verification passed."
